@@ -4,7 +4,7 @@ import type { CoreConfig } from "../config.js";
 import { FITCORD_SERVER, localStamp } from "../agent/prompts.js";
 import type { ShipResult, SyncResult, WorkspaceRef, Workspaces } from "../git/workspaces.js";
 import { checkCron } from "../schedule/cron.js";
-import type { Schedule } from "../session/types.js";
+import type { PollRequest, Schedule } from "../session/types.js";
 import type { Store } from "../store/index.js";
 
 /**
@@ -38,6 +38,11 @@ export interface FitcordToolDeps {
    * #training, should arrive in #training.
    */
   readonly defaultChannelId?: string | undefined;
+  /**
+   * Queues a poll to be posted after this turn's reply. Returns false when the
+   * turn has already asked for as many as it may.
+   */
+  readonly requestPoll: (poll: PollRequest) => boolean;
   /** Posts a schedule's brief now. Absent in the dev REPL, which has no channel. */
   readonly runScheduleNow?: ((schedule: Schedule) => void) | undefined;
 }
@@ -86,7 +91,15 @@ function describeSchedule(s: Schedule, timeZone: string): string {
   ].join("\n");
 }
 
-export const READ_TOOL_NAMES = ["workspace_status"] as const;
+/** Discord's limits on a poll. */
+export const POLL_MAX_OPTIONS = 10;
+export const POLL_MAX_OPTION_CHARS = 55;
+export const POLL_MAX_QUESTION_CHARS = 300;
+/** More than this in one turn is a questionnaire, not a question. */
+export const POLLS_PER_TURN = 3;
+
+/** Available in every run, scheduled or not: none of these can publish anything. */
+export const READ_TOOL_NAMES = ["workspace_status", "poll"] as const;
 export const INTERACTIVE_TOOL_NAMES = [
   "ship",
   "sync",
@@ -140,8 +153,48 @@ export function createFitcordServer(deps: FitcordToolDeps) {
     { annotations: { readOnlyHint: true } },
   );
 
+  const poll = tool(
+    "poll",
+    "Ask the person a multiple-choice question as a native Discord poll they answer with one tap. " +
+      "The poll is posted right after your reply, and their answer arrives later as a new message in " +
+      "this conversation. Use it for a rating on a scale, a choice between options you are offering, " +
+      "or a yes/no you would otherwise end your message with.",
+    {
+      key: z
+        .string()
+        .min(1)
+        .max(32)
+        .regex(/^[a-z0-9][a-z0-9_-]*$/, "lowercase letters, digits, dashes and underscores")
+        .describe("What the answer is, in a word — `rpe`, `soreness`, `ship`. It comes back with the answer."),
+      question: z.string().min(3).max(POLL_MAX_QUESTION_CHARS).describe("The question, as they will read it."),
+      options: z
+        .array(z.string().min(1).max(POLL_MAX_OPTION_CHARS))
+        .min(2)
+        .max(POLL_MAX_OPTIONS)
+        .describe(
+          `Two to ${POLL_MAX_OPTIONS} answers, each at most ${POLL_MAX_OPTION_CHARS} characters, in the order to show them. ` +
+            "For a scale, one option per point, lowest first.",
+        ),
+      multi: z
+        .boolean()
+        .default(false)
+        .describe("True to let them pick several answers — e.g. which muscles are sore."),
+    },
+    async (a) => {
+      if (new Set(a.options).size !== a.options.length) return failure("Not posted: two options are identical.");
+      const queued = deps.requestPoll({ key: a.key, question: a.question, options: a.options, multi: a.multi });
+      if (!queued) {
+        return failure(`Not posted: at most ${POLLS_PER_TURN} polls per reply. Ask the most useful ones first.`);
+      }
+      return text(
+        "Queued. The poll appears directly under your reply, so say in the reply that it is there. " +
+          "Do not guess the answer or act as if you have it — it arrives as their next message.",
+      );
+    },
+  );
+
   if (!deps.interactive) {
-    return createSdkMcpServer({ name: FITCORD_SERVER, version: "0.1.0", tools: [workspaceStatus] });
+    return createSdkMcpServer({ name: FITCORD_SERVER, version: "0.1.0", tools: [workspaceStatus, poll] });
   }
 
   const ship = tool(
@@ -283,6 +336,16 @@ export function createFitcordServer(deps: FitcordToolDeps) {
   return createSdkMcpServer({
     name: FITCORD_SERVER,
     version: "0.1.0",
-    tools: [workspaceStatus, ship, sync, workspaceReset, scheduleList, scheduleSet, scheduleDelete, scheduleRunNow],
+    tools: [
+      workspaceStatus,
+      poll,
+      ship,
+      sync,
+      workspaceReset,
+      scheduleList,
+      scheduleSet,
+      scheduleDelete,
+      scheduleRunNow,
+    ],
   });
 }

@@ -70,6 +70,36 @@ and ask.
 Mention the bot with `schedules` to list them. A brief that came due while the
 bot was down is skipped if it is more than `SCHEDULE_MAX_LATE_MS` late.
 
+## Polls
+
+When the answer is one of a few known things, the agent asks with a native
+Discord poll instead of making you type:
+
+- **A rating** — how hard a session felt (1–10), how sore you are.
+- **Which of several** — which muscles are sore (multi-select), which days are
+  free.
+- **A decision** — "run it as written", "drop a tier", "swap with tomorrow".
+- **A yes/no** — including "Ship this to master?". A yes vote is the request.
+
+The poll appears under the agent's reply. A few seconds after your last tap the
+bot closes it and hands the answer to the agent as your next message, so
+"RPE 7" goes into the log without a keystroke. The pause is deliberate: it is
+what lets you fix a mis-tap, or pick three options on a multi-select.
+
+A scheduled brief can end with a poll, and tapping it continues the brief in a
+thread. A poll nobody answers is not an answer: the agent is told to leave the
+field blank rather than guess.
+
+Only votes from people on the allowlist count. The bot needs the **Create
+Polls** permission.
+
+## Tables
+
+Discord does not render markdown tables. The agent writes an ordinary one and
+the bot redraws it as a card with one entry per row: the first column is the
+row's label, the other columns its value, and a column of GREEN / AMBER / RED
+becomes a coloured dot and the card's accent colour.
+
 ## Suunto
 
 The Suunto CLI ([`suuntool`](https://github.com/tajchert/suuntool)) is not baked
@@ -123,7 +153,8 @@ request, not as a side effect — but that is an instruction, not a gate.
 2. **Enable the Message Content privileged intent.** Without it, messages inside
    a thread arrive empty.
 3. Invite it with `View Channel`, `Send Messages`, `Create Public Threads`,
-   `Send Messages in Threads`, `Add Reactions`, and `Read Message History`.
+   `Send Messages in Threads`, `Add Reactions`, `Read Message History`, and
+   `Create Polls`.
 4. Set `DISCORD_CHAT_USER_IDS` (or `DISCORD_CHAT_ROLE_IDS`). **Startup refuses
    if both are empty** — turns spend your own subscription.
 

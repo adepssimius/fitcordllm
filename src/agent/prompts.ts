@@ -80,6 +80,30 @@ Its answer is posted to the channel as an ordinary message, and the person may c
 thread.`,
   ];
 
+  sections.push(`## Polls
+
+${t("poll")} asks a multiple-choice question as a native Discord poll: the person answers with one
+tap instead of typing. The poll is posted directly under your reply. Their answer arrives as their
+next message, marked as a poll answer, with the \`key\` you gave it.
+
+Reach for a poll whenever the answer is one of a few known things:
+
+- **A rating on a scale** — how hard a session felt, how sore they are. One option per point on the
+  scale, lowest first, and say what the ends mean ("1 — nothing", "10 — maximal").
+- **Which of several** — set \`multi\` when more than one can be true, such as which muscles are
+  sore or which days are free.
+- **A decision between options you are offering** — "run it as written", "drop a tier", "swap with
+  tomorrow". Put your recommendation first and say in the reply why.
+- **The yes/no you would end a message with** — including "Ship this to ${c.base}?". A "yes" vote
+  on that is the person asking for it, exactly as if they had typed it.
+
+Do not use one for an open question, for something you can look up, or for something you were just
+told. At most three per reply; one is usually right.
+
+A poll that is never answered means you do not have the answer. Never fill in a rating, a
+soreness score or a choice the person did not give — leave it blank, as the repository's own
+logging rules require.`);
+
   const data: string[] = [];
   if (c.hasSuunto) {
     data.push(
@@ -238,7 +262,9 @@ export function briefUserPrompt(
     `This is the scheduled brief "${schedule.name}". Nobody is waiting at the keyboard: your reply`,
     "is posted to the Discord channel as a message, and the person may start a thread from it to",
     "continue. Produce the brief itself — no preamble about being scheduled, no questions that block",
-    "it. If something it needs is unavailable, say which thing, and give the rest.",
+    "it. If something it needs is unavailable, say which thing, and give the rest. When the brief",
+    "needs something only they can supply — a rating, a choice — ask with the poll tool, not in prose:",
+    "a poll waits under the brief until they tap it.",
     "",
     "Do not ship anything during a scheduled run. Files you create or edit stay in this brief's own",
     "clone; say what you changed so it can be shipped from the thread if they want it.",
@@ -246,5 +272,23 @@ export function briefUserPrompt(
     "The brief to produce:",
     "",
     schedule.prompt,
+  ].join("\n");
+}
+
+/**
+ * A settled poll vote, phrased as the message it stands in for.
+ *
+ * Says outright that it is a poll answer and which poll: the agent may have
+ * asked two at once, and "6" alone does not say whether that was effort or
+ * soreness.
+ */
+export function pollAnswerContent(poll: { key: string; question: string }, chosen: readonly string[]): string {
+  const answer = chosen.length === 1 ? chosen[0] : chosen.map((c) => `- ${c}`).join("\n");
+  return [
+    `Poll answer (${poll.key}) — tapped, not typed.`,
+    `Question: ${poll.question}`,
+    chosen.length === 1 ? `Answer: ${answer}` : `Answers:\n${answer}`,
+    "",
+    "Do with it what you asked for it for. Keep the reply to a line or two.",
   ].join("\n");
 }

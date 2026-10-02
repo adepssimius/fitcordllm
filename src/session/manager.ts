@@ -19,8 +19,8 @@ import type { Workspaces, WorkspaceStatus } from "../git/workspaces.js";
 import { explainVerdict, type QuotaGuard } from "../quota/budget.js";
 import type { Store } from "../store/index.js";
 import type { ExternalTools } from "../suunto/mcp.js";
-import { createFitcordServer, fitcordToolNames } from "../tools/fitcord.js";
-import type { NewToolCall, Schedule, Session, TurnTrigger } from "./types.js";
+import { createFitcordServer, fitcordToolNames, POLLS_PER_TURN } from "../tools/fitcord.js";
+import type { NewToolCall, PollRequest, Schedule, Session, TurnTrigger } from "./types.js";
 
 /**
  * Owns the commit protocol. Nothing else writes session or turn state.
@@ -62,6 +62,8 @@ export interface TurnRan {
   readonly contextRebuilt: boolean;
   /** True when this turn had to create the clone — a new thread, or one swept for being idle. */
   readonly workspaceCreated: boolean;
+  /** Polls the agent asked for. The caller posts them after delivering the reply. */
+  readonly polls: readonly PollRequest[];
   readonly rateLimit?: SDKRateLimitInfo;
 }
 
@@ -324,6 +326,7 @@ export class SessionManager {
     if (freshId) store.sessions.setAgentSession(session.id, freshId);
 
     const pending: NewToolCall[] = [];
+    const polls: PollRequest[] = [];
     let denied = 0;
     let rateLimit: SDKRateLimitInfo | undefined;
 
@@ -363,6 +366,11 @@ export class SessionManager {
         interactive: req.interactive,
         // Only a real Discord id: the dev REPL's "repl" channel is not one.
         defaultChannelId: /^\d{5,25}$/.test(session.channelId) ? session.channelId : undefined,
+        requestPoll: (p) => {
+          if (polls.length >= POLLS_PER_TURN) return false;
+          polls.push(p);
+          return true;
+        },
         runScheduleNow: this.runScheduleNow,
       }),
       fitcordTools: fitcordToolNames(req.interactive),
@@ -456,6 +464,9 @@ export class SessionManager {
       deniedTools: denied,
       contextRebuilt,
       workspaceCreated,
+      // A run that failed part-way may have queued a poll about work it never
+      // finished; asking the person to rate that would be noise.
+      polls: outcome.ok ? polls : [],
       ...(rateLimit ? { rateLimit } : {}),
     };
   }

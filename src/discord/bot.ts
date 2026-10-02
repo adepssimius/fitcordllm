@@ -5,6 +5,8 @@ import {
   GatewayIntentBits,
   Partials,
   type Message,
+  type PartialPollAnswer,
+  type PollAnswer,
   type TextChannel,
   type ThreadChannel,
 } from "discord.js";
@@ -12,15 +14,16 @@ import type { CoreConfig, DiscordConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import type { Store } from "../store/index.js";
 import type { Workspaces } from "../git/workspaces.js";
-import { localStamp } from "../agent/prompts.js";
+import { localStamp, pollAnswerContent } from "../agent/prompts.js";
 import { SessionManager } from "../session/manager.js";
 import { ThreadQueue } from "../session/queue.js";
-import type { Schedule, Session } from "../session/types.js";
+import type { PollRequest, Schedule, Session } from "../session/types.js";
 import { checkActor } from "./authz.js";
 import { classifyContent, route, type RouteDecision } from "./router.js";
 import { buildThreadContext, type ContextMessage } from "./context.js";
 import { startTyping } from "./typing.js";
-import { ThreadStreamer } from "./streamer.js";
+import { ThreadStreamer, type Sendable } from "./streamer.js";
+import { VoteCollector } from "./votes.js";
 import { splitForDiscord } from "./render.js";
 
 export interface BotDeps {
@@ -36,7 +39,10 @@ export interface BotDeps {
 type Incoming =
   | {
       readonly kind: "chat";
-      readonly message: Message;
+      /** Absent when the turn was started by a poll vote rather than a typed message. */
+      readonly message?: Message;
+      readonly actorId: string;
+      readonly authorName: string;
       readonly content: string;
       readonly session: Session;
       readonly thread: ThreadChannel;
@@ -74,6 +80,7 @@ export class DiscordBot {
    */
   private ownRoleId: string | null = null;
   private readonly queue: ThreadQueue<Incoming>;
+  private readonly votes: VoteCollector;
 
   constructor(private readonly deps: BotDeps) {
     this.client = new Client({
@@ -84,8 +91,22 @@ export class DiscordBot {
         // content and only @mentions are readable — which breaks the
         // "every message in a bot thread is a prompt" model.
         GatewayIntentBits.MessageContent,
+        // Not privileged. Without it a tap on a poll never reaches the bot.
+        GatewayIntentBits.GuildMessagePolls,
       ],
-      partials: [Partials.Message, Partials.Channel],
+      // After a restart the poll's message is not cached; without the poll
+      // partials a vote on it is silently dropped.
+      partials: [Partials.Message, Partials.Channel, Partials.Poll, Partials.PollAnswer],
+    });
+
+    this.votes = new VoteCollector({
+      settleMs: deps.cfg.POLL_SETTLE_MS,
+      multiSettleMs: deps.cfg.POLL_MULTI_SETTLE_MS,
+      onSettled: (vote) => {
+        void this.onVoteSettled(vote).catch((e: unknown) =>
+          deps.log.error({ err: e, poll: vote.messageId }, "poll answer handler failed"),
+        );
+      },
     });
 
     this.queue = new ThreadQueue<Incoming>((head, rest) => this.runTurn(head, rest), {
@@ -120,6 +141,13 @@ export class DiscordBot {
       void this.onMessage(m).catch((e: unknown) => log.error({ err: e }, "message handler failed"));
     });
 
+    this.client.on(Events.MessagePollVoteAdd, (answer, userId) => {
+      void this.onVote(answer, userId, true).catch((e: unknown) => log.error({ err: e }, "vote handler failed"));
+    });
+    this.client.on(Events.MessagePollVoteRemove, (answer, userId) => {
+      void this.onVote(answer, userId, false).catch((e: unknown) => log.error({ err: e }, "vote handler failed"));
+    });
+
     await this.client.login(discord.DISCORD_BOT_TOKEN);
   }
 
@@ -129,6 +157,7 @@ export class DiscordBot {
   }
 
   async stop(): Promise<void> {
+    this.votes.clear();
     await this.client.destroy();
   }
 
@@ -311,6 +340,8 @@ export class DiscordBot {
     const r = this.queue.enqueue(session.id, {
       kind: "chat",
       message,
+      actorId: message.author.id,
+      authorName: message.member?.displayName ?? message.author.username,
       content,
       session,
       thread,
@@ -401,25 +432,165 @@ export class DiscordBot {
   /**
    * The thread a brief continues in, created from the brief's message if it
    * does not exist yet.
+   *
+   * `reply` is the channel message that asked to continue, when there is one.
+   * A poll vote has none: the brief's own message is then found by the id the
+   * session is filed under.
    */
-  private async briefThread(session: Session, reply: Message): Promise<ThreadChannel | undefined> {
+  private async briefThread(session: Session, reply?: Message): Promise<ThreadChannel | undefined> {
     const { log, store } = this.deps;
 
     const existing = await this.client.channels.fetch(session.threadId).catch(() => null);
     if (existing?.isThread()) return existing;
 
     try {
-      const brief = await reply.fetchReference();
+      let brief: Message;
+      if (reply) {
+        brief = await reply.fetchReference();
+      } else {
+        const channel = await this.client.channels.fetch(session.channelId);
+        if (!channel?.isTextBased()) throw new Error("the brief's channel is not a text channel");
+        brief = await channel.messages.fetch(session.threadId);
+      }
       const thread = brief.hasThread && brief.thread
         ? brief.thread
         : await brief.startThread({ name: session.title.slice(0, 90) || "brief", autoArchiveDuration: 1440 });
       store.sessions.bindThread(session.id, thread.id);
-      log.info({ sessionId: session.id, threadId: thread.id }, "brief continued from a reply");
+      log.info({ sessionId: session.id, threadId: thread.id }, "brief continued in a thread");
       return thread as ThreadChannel;
     } catch (e) {
       log.error({ err: e, sessionId: session.id }, "could not open a thread on the brief");
-      await reply.reply("I couldn't open a thread on that brief — check my permissions.").catch(() => undefined);
+      await reply?.reply("I couldn't open a thread on that brief — check my permissions.").catch(() => undefined);
       return undefined;
+    }
+  }
+
+  /**
+   * Posts the polls a turn asked for, under the reply it just delivered.
+   *
+   * After the reply, not during the turn: a poll sent from inside the tool
+   * call would land above the answer that introduces it.
+   */
+  private async postPolls(
+    target: Sendable,
+    targetId: string,
+    session: Session,
+    polls: readonly PollRequest[],
+  ): Promise<string[]> {
+    const { cfg, log, store } = this.deps;
+    const ids: string[] = [];
+    for (const p of polls) {
+      try {
+        const msg = await target.send({
+          poll: {
+            question: { text: p.question },
+            answers: p.options.map((text) => ({ text })),
+            duration: cfg.POLL_DURATION_HOURS,
+            allowMultiselect: p.multi,
+          },
+        });
+        store.polls.create({
+          messageId: msg.id,
+          sessionId: session.id,
+          channelId: targetId,
+          key: p.key,
+          question: p.question,
+          options: p.options,
+          multi: p.multi,
+        });
+        ids.push(msg.id);
+        log.info({ sessionId: session.id, poll: msg.id, key: p.key }, "poll posted");
+      } catch (e) {
+        // Usually the Create Polls permission. Say so where the person will
+        // see it, rather than leaving them waiting for a poll that never came.
+        log.error({ err: e, sessionId: session.id, key: p.key }, "could not post a poll");
+        await target
+          .send(`I couldn't post the poll "${p.question}" — I may be missing the **Create Polls** permission here.`)
+          .catch(() => undefined);
+      }
+    }
+    return ids;
+  }
+
+  /** One tap on a poll. Only taps by someone allowed to use the bot count. */
+  private async onVote(answer: PollAnswer | PartialPollAnswer, userId: string, added: boolean): Promise<void> {
+    const { discord, log, store } = this.deps;
+
+    const messageId = answer.poll.messageId;
+    const poll = store.polls.byMessage(messageId);
+    if (!poll || poll.answeredAt !== null) return; // not ours, or already answered
+
+    let allowed = discord.DISCORD_CHAT_USER_IDS.includes(userId);
+    if (!allowed && discord.DISCORD_CHAT_ROLE_IDS.length > 0) {
+      const guild = await this.client.guilds.fetch(discord.DISCORD_GUILD_ID).catch(() => null);
+      const member = await guild?.members.fetch(userId).catch(() => null);
+      allowed = checkActor(
+        { userIds: discord.DISCORD_CHAT_USER_IDS, roleIds: discord.DISCORD_CHAT_ROLE_IDS },
+        { userId, roleIds: member ? [...member.roles.cache.keys()] : [] },
+      ).allowed;
+    }
+    if (!allowed) {
+      // Anyone who can see the channel can tap a poll. Their tap must not
+      // become a turn on the operator's subscription.
+      log.info({ user: userId, poll: messageId }, "ignored a poll vote from someone not on the allowlist");
+      return;
+    }
+
+    if (added) this.votes.add(messageId, userId, answer.id, poll.multi);
+    else this.votes.remove(messageId, userId, answer.id, poll.multi);
+  }
+
+  /** A vote that has stopped changing: record it, close the poll, and hand it to the agent. */
+  private async onVoteSettled(vote: { messageId: string; userId: string; answerIds: number[] }): Promise<void> {
+    const { discord, log, store } = this.deps;
+
+    const poll = store.polls.byMessage(vote.messageId);
+    if (!poll) return;
+    // Discord numbers a poll's answers from 1, in the order they were given.
+    const chosen = vote.answerIds.map((id) => poll.options[id - 1]).filter((x): x is string => x !== undefined);
+    if (chosen.length === 0) return;
+    if (!store.polls.answer(vote.messageId, chosen)) return; // answered already; nothing to start
+
+    const session = store.sessions.byId(poll.sessionId);
+    if (!session) return;
+
+    // Close it, so the poll shows as answered instead of sitting open for a
+    // day. Best effort: a poll left open is untidy, not wrong.
+    const where = await this.client.channels.fetch(poll.channelId).catch(() => null);
+    if (where?.isTextBased()) {
+      const msg = await where.messages.fetch(vote.messageId).catch(() => null);
+      await msg?.poll?.end().catch(() => undefined);
+    }
+
+    const thread =
+      session.kind === "brief"
+        ? await this.briefThread(session)
+        : await this.client.channels.fetch(session.threadId).then(
+            (c) => (c?.isThread() ? c : undefined),
+            () => undefined,
+          );
+    if (!thread) {
+      log.error({ sessionId: session.id, poll: vote.messageId }, "poll answered but its thread is gone");
+      return;
+    }
+
+    const guild = await this.client.guilds.fetch(discord.DISCORD_GUILD_ID).catch(() => null);
+    const member = await guild?.members.fetch(vote.userId).catch(() => null);
+
+    log.info({ sessionId: session.id, poll: vote.messageId, key: poll.key, chosen }, "poll answered");
+    const r = this.queue.enqueue(session.id, {
+      kind: "chat",
+      actorId: vote.userId,
+      authorName: member?.displayName ?? "The person",
+      content: pollAnswerContent(poll, chosen),
+      // Re-read: a brief's session may just have been bound to its thread.
+      session: store.sessions.byId(session.id) ?? session,
+      thread,
+    });
+    if (!r.accepted) {
+      await thread
+        .send(`I got your answer to "${poll.question}" but my queue here is full — tell me again in a moment.`)
+        .catch(() => undefined);
     }
   }
 
@@ -644,7 +815,10 @@ export class DiscordBot {
     const delivered = await streamer.finish(`${result.text}\n\n${BRIEF_FOOTER}`);
     // Every chunk is a door back into this session: whichever message the
     // person threads from or replies to, it resolves here.
-    store.sessions.addAnchors(head.session.id, delivered.ids);
+    const pollIds = await this.postPolls(head.channel, head.channel.id, head.session, result.polls);
+    // A poll is part of the brief: threading from it or replying to it
+    // continues the same conversation.
+    store.sessions.addAnchors(head.session.id, [...delivered.ids, ...pollIds]);
     if (delivered.firstId) manager.markDelivered(result.turnId, delivered.firstId);
 
     log.info(
@@ -676,9 +850,9 @@ export class DiscordBot {
       {
         session,
         trigger: session.turnCount === 0 ? "mention" : "thread_message",
-        actorId: head.message.author.id,
+        actorId: head.actorId,
         message: {
-          authorDisplayName: head.message.member?.displayName ?? head.message.author.username,
+          authorDisplayName: head.authorName,
           content: head.content,
           ...(rest.length > 0 ? { coalescedWith: rest.map((r) => r.content) } : {}),
           ...(head.threadContext ? { threadContext: head.threadContext } : {}),
@@ -692,7 +866,7 @@ export class DiscordBot {
 
     if (result.blocked) {
       await head.thread.send(result.message).catch(() => undefined);
-      await head.message.react("❌").catch(() => undefined);
+      await head.message?.react("❌").catch(() => undefined);
       return;
     }
 
@@ -707,6 +881,7 @@ export class DiscordBot {
     const body = [...prefix, result.text].filter((s) => s.length > 0).join("\n\n");
     const delivered = await streamer.finish(body);
     if (delivered.firstId) manager.markDelivered(result.turnId, delivered.firstId);
+    await this.postPolls(head.thread, head.thread.id, session, result.polls);
 
     log.info(
       {

@@ -153,6 +153,16 @@ const CoreSchema = z.object({
   /** Refuse schedules that would fire more often than this. */
   SCHEDULE_MIN_INTERVAL_MIN: z.coerce.number().int().positive().default(30),
 
+  /** How long a poll stays open if nobody answers it. Discord's minimum is 1. */
+  POLL_DURATION_HOURS: z.coerce.number().int().min(1).max(768).default(24),
+  /**
+   * How long after the last tap before a vote is taken as final. Short for a
+   * single choice — just long enough to fix a mis-tap — and longer when
+   * several answers may be picked, since each one is a separate tap.
+   */
+  POLL_SETTLE_MS: z.coerce.number().int().nonnegative().default(4_000),
+  POLL_MULTI_SETTLE_MS: z.coerce.number().int().nonnegative().default(15_000),
+
   HTTP_PORT: z.coerce.number().int().positive().default(8080),
   HTTP_BIND: z.string().default("0.0.0.0"),
 });

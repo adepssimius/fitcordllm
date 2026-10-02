@@ -188,6 +188,11 @@ async function main(): Promise<void> {
 
     manager.markDelivered(result.turnId, "repl");
 
+    for (const p of result.polls) {
+      console.log(`\n${YELLOW}[poll · ${p.key}${p.multi ? " · multi" : ""}] ${p.question}${RESET}`);
+      p.options.forEach((o, i) => console.log(`${DIM}  ${i + 1}. ${o}${RESET}`));
+    }
+
     const secs = ((Date.now() - started) / 1000).toFixed(1);
     if (result.contextRebuilt) {
       console.log(`\n${YELLOW}[earlier context was lost; answered from a rebuilt recap]${RESET}`);

@@ -110,4 +110,28 @@ CREATE TABLE runtime_state (
 ) STRICT;
 `;
 
-export const MIGRATIONS: readonly Migration[] = [{ id: 1, name: "init", sql: INIT }];
+/**
+ * Polls the bot has posted. Keyed by the Discord message, because that is all a
+ * vote event carries: which poll message, which answer, which user.
+ */
+const POLLS = `
+CREATE TABLE polls (
+  message_id  TEXT    PRIMARY KEY,
+  session_id  TEXT    NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  channel_id  TEXT    NOT NULL,
+  key         TEXT    NOT NULL,
+  question    TEXT    NOT NULL,
+  options     TEXT    NOT NULL,
+  multi       INTEGER NOT NULL CHECK (multi IN (0,1)),
+  created_at  INTEGER NOT NULL,
+  answered_at INTEGER,
+  answer      TEXT
+) STRICT;
+
+CREATE INDEX polls_session ON polls(session_id);
+`;
+
+export const MIGRATIONS: readonly Migration[] = [
+  { id: 1, name: "init", sql: INIT },
+  { id: 2, name: "polls", sql: POLLS },
+];

@@ -5,6 +5,7 @@ import {
   briefUserPrompt,
   chatUserPrompt,
   localStamp,
+  pollAnswerContent,
   stripTurnHeader,
   systemAppend,
   turnHeader,
@@ -146,7 +147,13 @@ describe("user prompts", () => {
 describe("tool surface", () => {
   it("gives a scheduled run no way to publish or to schedule", () => {
     const names = fitcordToolNames(false);
-    expect(names).toEqual(["mcp__fitcord__workspace_status"]);
+    expect(names).toEqual(["mcp__fitcord__workspace_status", "mcp__fitcord__poll"]);
+  });
+
+  it("lets a scheduled brief ask a poll, which publishes nothing", () => {
+    expect(fitcordToolNames(false)).toContain("mcp__fitcord__poll");
+    const p = briefUserPrompt({ name: "morning-brief", prompt: "Run the daily brief." }, { now, timeZone: "UTC" });
+    expect(p).toContain("ask with the poll tool");
   });
 
   it("gives a conversation ship, sync and the schedule tools", () => {
@@ -154,6 +161,34 @@ describe("tool surface", () => {
     expect(names).toContain("mcp__fitcord__ship");
     expect(names).toContain("mcp__fitcord__sync");
     expect(names).toContain("mcp__fitcord__schedule_set");
+  });
+});
+
+describe("polls", () => {
+  it("tells the agent an unanswered poll is not an answer", () => {
+    expect(sys()).toContain("A poll that is never answered means you do not have the answer");
+  });
+
+  it("treats a yes on a ship poll as the request to ship", () => {
+    expect(sys()).toContain('"Ship this to master?"');
+  });
+
+  it("hands a single answer back with the question and its key", () => {
+    const out = pollAnswerContent({ key: "rpe", question: "How hard was that?" }, ["6 — hard"]);
+    expect(out).toContain("Poll answer (rpe)");
+    expect(out).toContain("Question: How hard was that?");
+    expect(out).toContain("Answer: 6 — hard");
+  });
+
+  it("lists every choice of a multi-select answer", () => {
+    const out = pollAnswerContent({ key: "sore", question: "Where?" }, ["calves", "quads"]);
+    expect(out).toContain("Answers:\n- calves\n- quads");
+  });
+
+  it("keeps a poll answer resumable — it is a prompt too, and must not open with a tag", () => {
+    const turn = { now, timeZone: "UTC", workspace: status() };
+    const content = pollAnswerContent({ key: "rpe", question: "How hard?" }, ["6"]);
+    expect(chatUserPrompt({ authorDisplayName: "sam", content }, turn).trimStart()[0]).not.toBe("<");
   });
 });
 

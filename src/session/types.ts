@@ -136,3 +136,23 @@ export interface NewSchedule {
   readonly createdBy: string | null;
   readonly nextRunAt: number | null;
 }
+
+/** A poll the agent asked for during a turn; the bot posts it after the reply. */
+export interface PollRequest {
+  /** What the answer is, in a word: `rpe`, `soreness`, `ship`. Echoed back with the vote. */
+  readonly key: string;
+  readonly question: string;
+  readonly options: readonly string[];
+  readonly multi: boolean;
+}
+
+/** A poll that has been posted, and the answer once there is one. */
+export interface PollRow extends PollRequest {
+  readonly messageId: string;
+  readonly sessionId: string;
+  /** Where the poll message is: a thread for a conversation, a channel for a brief. */
+  readonly channelId: string;
+  readonly createdAt: number;
+  readonly answeredAt: number | null;
+  readonly answer: readonly string[] | null;
+}

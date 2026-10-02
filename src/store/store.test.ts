@@ -28,7 +28,10 @@ beforeEach(() => {
 describe("migrations", () => {
   it("apply once", () => {
     const rows = store.raw.prepare("SELECT id, name FROM schema_migrations").all();
-    expect(rows).toEqual([{ id: 1, name: "init" }]);
+    expect(rows).toEqual([
+      { id: 1, name: "init" },
+      { id: 2, name: "polls" },
+    ]);
   });
 
   it("enforce STRICT typing on the quota ledger", () => {
@@ -153,5 +156,51 @@ describe("schedules", () => {
     expect(store.schedules.delete("morning-brief")).toBe(true);
     expect(store.sessions.byId(session.id)).toBeDefined();
     expect(store.schedules.delete("morning-brief")).toBe(false);
+  });
+});
+
+describe("polls", () => {
+  function post(sessionId: string, over: { messageId?: string; multi?: boolean } = {}) {
+    store.polls.create({
+      messageId: over.messageId ?? "poll-1",
+      sessionId,
+      channelId: "t1",
+      key: "rpe",
+      question: "How hard was that?",
+      options: ["1 — nothing", "2", "3"],
+      multi: over.multi ?? false,
+    });
+  }
+
+  it("are found by the message a vote names", () => {
+    const s = newSession();
+    post(s.id);
+    expect(store.polls.byMessage("poll-1")).toMatchObject({
+      sessionId: s.id,
+      key: "rpe",
+      options: ["1 — nothing", "2", "3"],
+      multi: false,
+      answeredAt: null,
+      answer: null,
+    });
+    expect(store.polls.byMessage("someone-elses-poll")).toBeUndefined();
+  });
+
+  it("take an answer exactly once, so a vote cannot start two turns", () => {
+    post(newSession().id);
+    expect(store.polls.answer("poll-1", ["2"])).toBe(true);
+    expect(store.polls.answer("poll-1", ["3"])).toBe(false);
+    expect(store.polls.byMessage("poll-1")?.answer).toEqual(["2"]);
+  });
+
+  it("keep every choice of a multi-select answer", () => {
+    post(newSession().id, { multi: true });
+    store.polls.answer("poll-1", ["2", "3"]);
+    expect(store.polls.byMessage("poll-1")).toMatchObject({ multi: true, answer: ["2", "3"] });
+  });
+
+  it("report no answer for a poll nobody tapped", () => {
+    post(newSession().id);
+    expect(store.polls.byMessage("poll-1")?.answeredAt).toBeNull();
   });
 });
