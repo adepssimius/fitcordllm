@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.log
+.env
+.env.local
+data/
+.agent-workspace/
+coverage/
+.DS_Store
+*.tmp.mjs
+
+# local dev state (db, agent transcripts)
+.local/
