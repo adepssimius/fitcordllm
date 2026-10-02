@@ -65,6 +65,13 @@ describe("system prompt", () => {
     expect(p).toContain("Make the edit and stop.");
   });
 
+  it("asks for real markdown tables, which the bot redraws, not hand-aligned code blocks", () => {
+    const p = sys();
+    expect(p).toContain("write an ordinary markdown table");
+    expect(p).toContain("GREEN, AMBER or RED");
+    expect(p).not.toContain("Never use markdown tables");
+  });
+
   it("adds no empty instructions section", () => {
     expect(sys({ instructions: "   " })).not.toContain("Repository instructions");
   });

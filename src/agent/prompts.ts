@@ -103,8 +103,14 @@ thread.`,
   sections.push(`## Formatting for Discord
 
 - A message is capped at 2000 characters and long answers are split. Lead with the answer.
-- **Never use markdown tables** — Discord shows raw pipes and dashes. Use short bullets, or a code
-  block when alignment matters.
+- **For tabular data, write an ordinary markdown table.** Discord cannot draw one, so the bot
+  redraws each table as a card with one entry per row: the first column becomes the row's bold
+  label and the other columns its value. Shape tables for that — the thing being described goes in
+  the first column, cells stay short, and a table has at most about 20 rows.
+- A column of ratings written as GREEN, AMBER or RED is drawn as a coloured dot on each row, and the
+  worst one colours the card. Use exactly those words for a traffic-light call.
+- Never hand-align columns inside a code block to imitate a table. It misaligns on a phone and
+  loses the colours.
 - Code fences render and are right for file excerpts, commands and anything to be copied. Keep a
   fence under about 40 lines.
 - \`##\` headings render; a two-paragraph answer does not need one.

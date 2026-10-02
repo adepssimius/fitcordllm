@@ -1,5 +1,6 @@
 import { AttachmentBuilder, type Message, type MessageCreateOptions } from "discord.js";
-import { formatToolCall, renderProgress, splitForDiscord, SAFE_LIMIT } from "./render.js";
+import { formatToolCall, renderProgress, SAFE_LIMIT } from "./render.js";
+import { buildMessages, type OutMessage } from "./tables.js";
 
 /**
  * Edit-in-place progress for a long agent run.
@@ -107,8 +108,9 @@ export class ThreadStreamer {
 
   /**
    * Replaces the live message with the finished answer. Long answers are split
-   * fence-aware, and very long ones are attached as a file rather than smeared
-   * across many messages.
+   * fence-aware, markdown tables are rendered as embeds (see tables.ts), and
+   * very long answers are attached as a file rather than smeared across many
+   * messages.
    */
   async finish(finalText: string): Promise<Delivered> {
     this.closed = true;
@@ -131,24 +133,26 @@ export class ThreadStreamer {
       return { firstId: msg?.id, ids: msg ? [msg.id] : [] };
     }
 
-    const chunks = splitForDiscord(text);
-    const first = chunks[0] ?? text;
+    // Markdown tables become embeds; everything else is split fence-aware.
+    const messages = buildMessages(text);
+    const payload = (m: OutMessage) => ({ content: m.content, embeds: m.embeds.map((e) => ({ ...e })) });
+    const head = messages[0] ?? { content: text, embeds: [] };
     let firstMsg: Message | undefined;
 
     try {
-      firstMsg = this.live ? await this.live.edit(first) : await this.thread.send(first);
+      firstMsg = this.live ? await this.live.edit(payload(head)) : await this.thread.send(payload(head));
     } catch {
-      firstMsg = await this.thread.send(first).catch(() => undefined);
+      firstMsg = await this.thread.send(payload(head)).catch(() => undefined);
     }
     const ids: string[] = firstMsg ? [firstMsg.id] : [];
 
-    for (const rest of chunks.slice(1)) {
+    for (const rest of messages.slice(1)) {
       if (this.posted >= this.opts.maxMessages) {
         await this.thread.send("_output truncated — message cap reached._").catch(() => undefined);
         break;
       }
       this.posted += 1;
-      const more = await this.thread.send(rest).catch(() => undefined);
+      const more = await this.thread.send(payload(rest)).catch(() => undefined);
       if (more) ids.push(more.id);
     }
 
