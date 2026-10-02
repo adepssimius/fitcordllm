@@ -21,6 +21,8 @@ export type TurnStatus = "running" | "ok" | "error" | "interrupted" | "aborted";
 
 export interface Session {
   readonly id: string;
+  /** Whose setup this conversation belongs to — see ProfileConfig. */
+  readonly profile: string;
   readonly kind: SessionKind;
   readonly status: SessionStatus;
   readonly guildId: string;
@@ -51,6 +53,7 @@ export interface Session {
 
 export interface NewSession {
   readonly id: string;
+  readonly profile: string;
   readonly kind: SessionKind;
   readonly guildId: string;
   readonly channelId: string;
@@ -113,7 +116,8 @@ export interface NewToolCall {
 /** A recurring prompt whose answer is posted to a channel. */
 export interface Schedule {
   readonly id: number;
-  /** Unique, and what the operator refers to it by. */
+  readonly profile: string;
+  /** Unique within its profile, and what the operator refers to it by. */
   readonly name: string;
   /** Five-field cron, evaluated in BOT_TIMEZONE. */
   readonly cron: string;
@@ -128,6 +132,7 @@ export interface Schedule {
 }
 
 export interface NewSchedule {
+  readonly profile: string;
   readonly name: string;
   readonly cron: string;
   readonly prompt: string;

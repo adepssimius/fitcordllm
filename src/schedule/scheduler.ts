@@ -25,10 +25,10 @@ export type Plan =
 export function plan(
   due: readonly Schedule[],
   now: number,
-  opts: { readonly timeZone: string; readonly maxLateMs: number },
+  opts: { readonly timeZoneFor: (s: Schedule) => string; readonly maxLateMs: number },
 ): Plan[] {
   return due.map((schedule) => {
-    const next = nextRun(schedule.cron, opts.timeZone, new Date(now))?.getTime() ?? null;
+    const next = nextRun(schedule.cron, opts.timeZoneFor(schedule), new Date(now))?.getTime() ?? null;
     const lateMs = now - (schedule.nextRunAt ?? now);
     return lateMs > opts.maxLateMs
       ? { action: "skip", schedule, next, lateMs }
@@ -44,6 +44,8 @@ export class Scheduler {
     private readonly cfg: CoreConfig,
     private readonly log: Logger,
     private readonly store: Store,
+    /** Each profile keeps its own clock: a schedule fires in its owner's zone. */
+    private readonly timeZoneFor: (schedule: Schedule) => string,
     private readonly run: (schedule: Schedule) => void,
     private readonly sweep: () => Promise<void>,
   ) {}
@@ -53,7 +55,7 @@ export class Scheduler {
     // backup, may have no next run recorded. Give every enabled one a future.
     for (const s of this.store.schedules.list()) {
       if (s.enabled && s.nextRunAt === null) {
-        this.store.schedules.advance(s.id, nextRun(s.cron, this.cfg.BOT_TIMEZONE, new Date())?.getTime() ?? null, null);
+        this.store.schedules.advance(s.id, nextRun(s.cron, this.timeZoneFor(s), new Date())?.getTime() ?? null, null);
       }
     }
 
@@ -67,7 +69,7 @@ export class Scheduler {
     this.sweepTimer.unref?.();
     sweep();
 
-    this.log.info({ schedules: this.store.schedules.list().length, timeZone: this.cfg.BOT_TIMEZONE }, "scheduler started");
+    this.log.info({ schedules: this.store.schedules.list().length }, "scheduler started");
   }
 
   stop(): void {
@@ -84,7 +86,7 @@ export class Scheduler {
       return;
     }
 
-    for (const p of plan(due, now, { timeZone: this.cfg.BOT_TIMEZONE, maxLateMs: this.cfg.SCHEDULE_MAX_LATE_MS })) {
+    for (const p of plan(due, now, { timeZoneFor: this.timeZoneFor, maxLateMs: this.cfg.SCHEDULE_MAX_LATE_MS })) {
       // Advance BEFORE running: if the process dies mid-brief, the cost is one
       // missed brief, not the same brief again on every restart.
       this.store.schedules.advance(p.schedule.id, p.next, p.action === "run" ? now : null);

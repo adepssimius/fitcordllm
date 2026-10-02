@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { access, mkdir, readFile, readdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
-import type { CoreConfig } from "../config.js";
+import type { Config } from "../config.js";
 import type { Logger } from "../logger.js";
 
 /**
@@ -88,13 +88,18 @@ export class GitError extends Error {
 
 export class Workspaces {
   private base: string | undefined;
-  /** Serialises mutating operations per workspace. */
-  private readonly locks = new Map<string, Promise<unknown>>();
+  /** Serialises mutating operations per workspace. Read by sweep() across instances. */
+  readonly locks = new Map<string, Promise<unknown>>();
 
   constructor(
-    private readonly cfg: CoreConfig,
+    private readonly cfg: Config,
     private readonly log: Logger,
   ) {}
+
+  /** Which profile this clone set belongs to. */
+  get profile(): string {
+    return this.cfg.name;
+  }
 
   get configured(): boolean {
     return this.cfg.remoteUrl !== undefined;
@@ -453,13 +458,15 @@ export class Workspaces {
   /**
    * Deletes clones that are both idle and empty of unshipped work.
    *
-   * `lookup` returns the session's branch and when it last ran a turn, or
-   * undefined for a directory no session owns. A clone holding anything
-   * unshipped is never deleted here, however old: that work exists nowhere
-   * else.
+   * `lookup` returns the session's branch, when it last ran a turn, and the
+   * Workspaces that owns it — several profiles share one clone directory, and
+   * "unshipped" means "differs from THAT profile's base branch". Undefined
+   * means a directory no session owns, which this instance inspects itself.
+   * A clone holding anything unshipped is never deleted here, however old:
+   * that work exists nowhere else.
    */
   async sweep(
-    lookup: (sessionId: string) => { branch: string; lastActiveAt: number } | undefined,
+    lookup: (sessionId: string) => { branch: string; lastActiveAt: number; workspaces?: Workspaces } | undefined,
     now = Date.now(),
   ): Promise<string[]> {
     const removed: string[] = [];
@@ -473,14 +480,15 @@ export class Workspaces {
 
     for (const id of entries) {
       if (id.includes(".cloning-")) continue;
-      if (this.locks.has(id)) continue;
       const owner = lookup(id);
+      const ws = owner?.workspaces ?? this;
+      if (ws.locks.has(id)) continue;
       if (owner && now - owner.lastActiveAt < idleMs) continue;
-      if (!(await this.exists(id))) continue;
+      if (!(await ws.exists(id))) continue;
       try {
-        const st = await this.status({ id, branch: owner?.branch ?? "" });
+        const st = await ws.status({ id, branch: owner?.branch ?? "" });
         if (st.unshipped.length > 0 || st.merging) continue;
-        await this.remove(id);
+        await ws.remove(id);
         removed.push(id);
       } catch (e) {
         this.log.warn({ err: e, sessionId: id }, "could not inspect a workspace during cleanup");

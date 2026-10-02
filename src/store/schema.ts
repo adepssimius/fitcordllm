@@ -131,7 +131,21 @@ CREATE TABLE polls (
 CREATE INDEX polls_session ON polls(session_id);
 `;
 
+/**
+ * Profiles: one bot serving several people. Rows that predate this belong to
+ * the profile called `default`, which is also what a deployment with no
+ * FITCORD_PROFILES is called — so an existing single-person installation keeps
+ * every thread. Schedule names become unique per profile instead of globally.
+ */
+const PROFILES = `
+ALTER TABLE sessions  ADD COLUMN profile TEXT NOT NULL DEFAULT 'default';
+ALTER TABLE schedules ADD COLUMN profile TEXT NOT NULL DEFAULT 'default';
+DROP INDEX schedules_name;
+CREATE UNIQUE INDEX schedules_profile_name ON schedules(profile, name);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { id: 1, name: "init", sql: INIT },
   { id: 2, name: "polls", sql: POLLS },
+  { id: 3, name: "profiles", sql: PROFILES },
 ];

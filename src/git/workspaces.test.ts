@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadCore } from "../config.js";
+import { loadConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import { Workspaces, type WorkspaceRef } from "./workspaces.js";
 
@@ -60,7 +60,7 @@ beforeEach(() => {
   git(seed, "commit", "--quiet", "-m", "seed");
   git(seed, "push", "--quiet", "origin", "HEAD:master");
 
-  const cfg = loadCore({ DATA_DIR: join(root, "data"), GIT_REMOTE_URL: origin } as NodeJS.ProcessEnv);
+  const cfg = loadConfig({ DATA_DIR: join(root, "data"), GIT_REMOTE_URL: origin } as NodeJS.ProcessEnv);
   workspaces = new Workspaces(cfg, silentLog);
 });
 

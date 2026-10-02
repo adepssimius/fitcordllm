@@ -70,6 +70,33 @@ and ask.
 Mention the bot with `schedules` to list them. A brief that came due while the
 bot was down is skipped if it is more than `SCHEDULE_MAX_LATE_MS` late.
 
+## Serving more than one person
+
+One bot can serve several people. Each is a **profile**: a Discord channel
+(and who may talk there), a repository and its token, a Suunto session, and
+optionally Liftosaur. The bot identity, the Claude subscription and its quota
+guard, the database and the volume are shared.
+
+```bash
+FITCORD_PROFILES=ben,amy
+PROFILE_BEN_GIT_REPO=ben/training        PROFILE_AMY_GIT_REPO=amy/training
+PROFILE_BEN_GITHUB_TOKEN=…               PROFILE_AMY_GITHUB_TOKEN=…
+PROFILE_BEN_DISCORD_CHAT_CHANNEL_IDS=…   PROFILE_AMY_DISCORD_CHAT_CHANNEL_IDS=…
+PROFILE_BEN_SUUNTOOL_SESSION_KEY=…       PROFILE_AMY_SUUNTOOL_SESSION_KEY=…
+PROFILE_BEN_LIFTOSAUR_API_KEY=…          # Amy has none; hers is simply unset
+```
+
+A plain variable (`BOT_TIMEZONE`, `GIT_AUTHOR_NAME`, …) is the default for
+every profile; `PROFILE_<NAME>_<VARIABLE>` overrides it for one. Mind that
+with secrets: a plain `GITHUB_TOKEN` would be every profile's token.
+
+The channel a message arrives in decides whose it is, so with several
+profiles each needs a channel list. Threads, schedules and polls remember
+their profile. Without `FITCORD_PROFILES` there is one profile, `default`,
+read from the plain variables — which is how a single-person deployment is
+configured. Naming profiles later keeps every existing thread: they are
+handed to the first profile named.
+
 ## Polls
 
 When the answer is one of a few known things, the agent asks with a native
@@ -155,8 +182,11 @@ request, not as a side effect — but that is an instruction, not a gate.
 3. Invite it with `View Channel`, `Send Messages`, `Create Public Threads`,
    `Send Messages in Threads`, `Add Reactions`, `Read Message History`, and
    `Create Polls`.
-4. Set `DISCORD_CHAT_USER_IDS` (or `DISCORD_CHAT_ROLE_IDS`). **Startup refuses
-   if both are empty** — turns spend your own subscription.
+4. Give it a channel: `DISCORD_CHAT_CHANNEL_IDS`. Make the channel private, and
+   Discord's permissions decide who may talk to the bot. `DISCORD_CHAT_USER_IDS`
+   or `DISCORD_CHAT_ROLE_IDS` narrow that further, and are required only if
+   the bot answers in any channel. **Startup refuses a profile with neither** —
+   turns spend your own subscription.
 
 ### Configuration
 
@@ -166,7 +196,7 @@ with what each is for. The ones without which nothing works:
 | Variable | |
 | --- | --- |
 | `CLAUDE_CODE_OAUTH_TOKEN` | from `claude setup-token` |
-| `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, `DISCORD_CHAT_USER_IDS` | |
+| `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, `DISCORD_CHAT_CHANNEL_IDS` | |
 | `GIT_REPO` | `owner/name` |
 | `GITHUB_TOKEN` | fine-grained, Contents read/write on that one repository |
 | `DATA_DIR`, `HOME` | both on persistent storage |

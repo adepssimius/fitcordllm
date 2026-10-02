@@ -8,6 +8,7 @@ let store: Store;
 function newSession(over: Partial<NewSession> = {}) {
   return store.sessions.create({
     id: randomUUID(),
+    profile: "default",
     kind: "chat",
     guildId: "g1",
     channelId: "c1",
@@ -31,6 +32,7 @@ describe("migrations", () => {
     expect(rows).toEqual([
       { id: 1, name: "init" },
       { id: 2, name: "polls" },
+      { id: 3, name: "profiles" },
     ]);
   });
 
@@ -65,7 +67,7 @@ describe("sessions", () => {
       { status: "ok", result: "a", error: null, errorSubtype: null, numTurns: 2, costUsd: 0, deniedToolCount: 0 },
       Date.now() + 2000,
     );
-    expect(store.sessions.recent(10).map((s) => s.id)).toEqual([old.id, fresh.id]);
+    expect(store.sessions.recent("default", 10).map((s) => s.id)).toEqual([old.id, fresh.id]);
   });
 
   it("return running sessions to idle on recovery", () => {
@@ -114,6 +116,7 @@ describe("continuing a brief", () => {
 
 describe("schedules", () => {
   const row = {
+    profile: "default",
     name: "morning-brief",
     cron: "0 6 * * *",
     prompt: "Run the daily brief.",
@@ -140,22 +143,22 @@ describe("schedules", () => {
     const s = store.schedules.upsert(row);
     store.schedules.advance(s.id, 90_000, 1_500);
     expect(store.schedules.due(2_000)).toEqual([]);
-    expect(store.schedules.byName("morning-brief")).toMatchObject({ nextRunAt: 90_000, lastRunAt: 1_500 });
+    expect(store.schedules.byName("default", "morning-brief")).toMatchObject({ nextRunAt: 90_000, lastRunAt: 1_500 });
   });
 
   it("keep the last run time when a late run is skipped", () => {
     const s = store.schedules.upsert(row);
     store.schedules.advance(s.id, 90_000, 1_500);
     store.schedules.advance(s.id, 180_000, null);
-    expect(store.schedules.byName("morning-brief")?.lastRunAt).toBe(1_500);
+    expect(store.schedules.byName("default", "morning-brief")?.lastRunAt).toBe(1_500);
   });
 
   it("leave past briefs in place when deleted", () => {
     const s = store.schedules.upsert(row);
     const session = newSession({ kind: "brief", scheduleId: s.id });
-    expect(store.schedules.delete("morning-brief")).toBe(true);
+    expect(store.schedules.delete("default", "morning-brief")).toBe(true);
     expect(store.sessions.byId(session.id)).toBeDefined();
-    expect(store.schedules.delete("morning-brief")).toBe(false);
+    expect(store.schedules.delete("default", "morning-brief")).toBe(false);
   });
 });
 
@@ -202,5 +205,46 @@ describe("polls", () => {
   it("report no answer for a poll nobody tapped", () => {
     post(newSession().id);
     expect(store.polls.byMessage("poll-1")?.answeredAt).toBeNull();
+  });
+});
+
+describe("profiles", () => {
+  it("keep one person's threads out of another's listing", () => {
+    const mine = newSession({ profile: "ben" });
+    newSession({ profile: "amy" });
+    expect(store.sessions.recent("ben", 10).map((s) => s.id)).toEqual([mine.id]);
+  });
+
+  it("hand the pre-profile rows to the renamed first profile", () => {
+    const old = newSession({ profile: "default" });
+    store.schedules.upsert({
+      profile: "default", name: "morning-brief", cron: "0 6 * * *", prompt: "p",
+      channelId: null, enabled: true, createdBy: null, nextRunAt: 1_000,
+    });
+    expect(store.sessions.relabelProfile("default", "ben")).toBe(1);
+    expect(store.schedules.relabelProfile("default", "ben")).toBe(1);
+    expect(store.sessions.byId(old.id)?.profile).toBe("ben");
+    expect(store.schedules.list("ben")).toHaveLength(1);
+    expect(store.sessions.relabelProfile("default", "ben")).toBe(0);
+  });
+
+  it("let two profiles each have a schedule of the same name", () => {
+    const row = {
+      cron: "0 6 * * *",
+      prompt: "Run the daily brief.",
+      channelId: null,
+      enabled: true,
+      createdBy: null,
+      nextRunAt: 1_000,
+    };
+    store.schedules.upsert({ ...row, profile: "ben", name: "morning-brief" });
+    store.schedules.upsert({ ...row, profile: "amy", name: "morning-brief", cron: "30 6 * * *" });
+    expect(store.schedules.list("ben").map((s) => s.cron)).toEqual(["0 6 * * *"]);
+    expect(store.schedules.list("amy").map((s) => s.cron)).toEqual(["30 6 * * *"]);
+    expect(store.schedules.list()).toHaveLength(2);
+    // Both are due; the scheduler sees every profile's at once.
+    expect(store.schedules.due(1_000)).toHaveLength(2);
+    expect(store.schedules.delete("amy", "morning-brief")).toBe(true);
+    expect(store.schedules.list("ben")).toHaveLength(1);
   });
 });

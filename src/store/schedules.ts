@@ -3,6 +3,7 @@ import type { NewSchedule, Schedule } from "../session/types.js";
 
 interface ScheduleRow {
   id: number;
+  profile: string;
   name: string;
   cron: string;
   prompt: string;
@@ -17,6 +18,7 @@ interface ScheduleRow {
 function hydrate(r: ScheduleRow): Schedule {
   return {
     id: r.id,
+    profile: r.profile,
     name: r.name,
     cron: r.cron,
     prompt: r.prompt,
@@ -30,13 +32,14 @@ function hydrate(r: ScheduleRow): Schedule {
 }
 
 export interface ScheduleDao {
-  list(): readonly Schedule[];
+  /** One profile's schedules, or every profile's when none is given. */
+  list(profile?: string): readonly Schedule[];
   byId(id: number): Schedule | undefined;
-  byName(name: string): Schedule | undefined;
-  /** Creates the schedule, or replaces the one with the same name. */
+  byName(profile: string, name: string): Schedule | undefined;
+  /** Creates the schedule, or replaces the one with the same name in the same profile. */
   upsert(row: NewSchedule, now?: number): Schedule;
-  delete(name: string): boolean;
-  /** Enabled schedules whose next run is at or before `now`. */
+  delete(profile: string, name: string): boolean;
+  /** Enabled schedules of every profile whose next run is at or before `now`. */
   due(now: number): readonly Schedule[];
   /**
    * Moves a schedule on to its next run. Called BEFORE the brief is produced,
@@ -44,41 +47,47 @@ export interface ScheduleDao {
    * restart.
    */
   advance(id: number, nextRunAt: number | null, ranAt: number | null): void;
+  /** Moves every schedule of one profile to another. Returns how many moved. */
+  relabelProfile(from: string, to: string): number;
 }
 
 export function createScheduleDao(db: Db): ScheduleDao {
-  const selAll = db.prepare("SELECT * FROM schedules ORDER BY name");
+  const selAll = db.prepare("SELECT * FROM schedules ORDER BY profile, name");
+  const selProfile = db.prepare("SELECT * FROM schedules WHERE profile = ? ORDER BY name");
   const selById = db.prepare("SELECT * FROM schedules WHERE id = ?");
-  const selByName = db.prepare("SELECT * FROM schedules WHERE name = ?");
+  const selByName = db.prepare("SELECT * FROM schedules WHERE profile = ? AND name = ?");
   const selDue = db.prepare(
     "SELECT * FROM schedules WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ? ORDER BY next_run_at",
   );
   const up = db.prepare(
-    `INSERT INTO schedules (name, cron, prompt, channel_id, enabled, created_by, created_at, next_run_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(name) DO UPDATE SET
+    `INSERT INTO schedules (profile, name, cron, prompt, channel_id, enabled, created_by, created_at, next_run_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(profile, name) DO UPDATE SET
        cron = excluded.cron, prompt = excluded.prompt, channel_id = excluded.channel_id,
        enabled = excluded.enabled, next_run_at = excluded.next_run_at`,
   );
-  const del = db.prepare("DELETE FROM schedules WHERE name = ?");
+  const del = db.prepare("DELETE FROM schedules WHERE profile = ? AND name = ?");
   const adv = db.prepare(
     "UPDATE schedules SET next_run_at = ?, last_run_at = COALESCE(?, last_run_at) WHERE id = ?",
   );
+  const relabel = db.prepare("UPDATE schedules SET profile = ? WHERE profile = ?");
 
   return {
-    list() {
-      return (selAll.all() as unknown as ScheduleRow[]).map(hydrate);
+    list(profile) {
+      const rows = profile === undefined ? selAll.all() : selProfile.all(profile);
+      return (rows as unknown as ScheduleRow[]).map(hydrate);
     },
     byId(id) {
       const r = selById.get(id) as unknown as ScheduleRow | undefined;
       return r ? hydrate(r) : undefined;
     },
-    byName(name) {
-      const r = selByName.get(name) as unknown as ScheduleRow | undefined;
+    byName(profile, name) {
+      const r = selByName.get(profile, name) as unknown as ScheduleRow | undefined;
       return r ? hydrate(r) : undefined;
     },
     upsert(row, now = Date.now()) {
       up.run(
+        row.profile,
         row.name,
         row.cron,
         row.prompt,
@@ -88,16 +97,19 @@ export function createScheduleDao(db: Db): ScheduleDao {
         now,
         row.nextRunAt,
       );
-      return hydrate(selByName.get(row.name) as unknown as ScheduleRow);
+      return hydrate(selByName.get(row.profile, row.name) as unknown as ScheduleRow);
     },
-    delete(name) {
-      return Number(del.run(name).changes) > 0;
+    delete(profile, name) {
+      return Number(del.run(profile, name).changes) > 0;
     },
     due(now) {
       return (selDue.all(now) as unknown as ScheduleRow[]).map(hydrate);
     },
     advance(id, nextRunAt, ranAt) {
       adv.run(nextRunAt, ranAt, id);
+    },
+    relabelProfile(from, to) {
+      return Number(relabel.run(to, from).changes);
     },
   };
 }

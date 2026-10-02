@@ -4,6 +4,7 @@ import type { NewSession, Session, SessionKind, SessionStatus } from "../session
 
 interface SessionRow {
   id: string;
+  profile: string;
   kind: string;
   status: string;
   guild_id: string;
@@ -26,6 +27,7 @@ interface SessionRow {
 function hydrate(r: SessionRow): Session {
   return {
     id: r.id,
+    profile: r.profile,
     kind: r.kind as SessionKind,
     status: r.status as SessionStatus,
     guildId: r.guild_id,
@@ -67,10 +69,12 @@ export interface SessionDao {
   bindThread(sessionId: string, threadId: string, now?: number): void;
   clearAgentSession(id: string, now?: number): void;
   setAgentSession(id: string, agentSessionId: string, now?: number): void;
-  /** Most recently active first. */
-  recent(limit: number): readonly Session[];
+  /** Most recently active first, within one profile. */
+  recent(profile: string, limit: number): readonly Session[];
   /** Boot recovery: sessions left mid-run by a crash. */
   resetRunning(now?: number): number;
+  /** Moves every session of one profile to another. Returns how many moved. */
+  relabelProfile(from: string, to: string, now?: number): number;
 }
 
 export function createSessionDao(db: Db): SessionDao {
@@ -80,12 +84,12 @@ export function createSessionDao(db: Db): SessionDao {
     "SELECT s.* FROM sessions s JOIN anchors a ON a.session_id = s.id WHERE a.message_id = ?",
   );
   const selRecent = db.prepare(
-    "SELECT * FROM sessions WHERE status <> 'closed' ORDER BY COALESCE(last_turn_at, created_at) DESC LIMIT ?",
+    "SELECT * FROM sessions WHERE profile = ? AND status <> 'closed' ORDER BY COALESCE(last_turn_at, created_at) DESC LIMIT ?",
   );
   const ins = db.prepare(
-    `INSERT INTO sessions (id, kind, status, guild_id, channel_id, thread_id, agent_session_id,
+    `INSERT INTO sessions (id, profile, kind, status, guild_id, channel_id, thread_id, agent_session_id,
        opened_by, title, branch, schedule_id, created_at, updated_at)
-     VALUES (?, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insAnchor = db.prepare("INSERT OR IGNORE INTO anchors (message_id, session_id) VALUES (?, ?)");
   const delAnchors = db.prepare("DELETE FROM anchors WHERE session_id = ?");
@@ -94,6 +98,7 @@ export function createSessionDao(db: Db): SessionDao {
   const resetRun = db.prepare(
     "UPDATE sessions SET status = 'idle', updated_at = ? WHERE status = 'running'",
   );
+  const relabel = db.prepare("UPDATE sessions SET profile = ?, updated_at = ? WHERE profile = ?");
 
   return {
     byThread(threadId) {
@@ -107,6 +112,7 @@ export function createSessionDao(db: Db): SessionDao {
     create(row, now = Date.now()) {
       ins.run(
         row.id,
+        row.profile,
         row.kind,
         row.guildId,
         row.channelId,
@@ -143,11 +149,14 @@ export function createSessionDao(db: Db): SessionDao {
     setAgentSession(id, agentSessionId, now = Date.now()) {
       updAgent.run(agentSessionId, now, id);
     },
-    recent(limit) {
-      return (selRecent.all(limit) as unknown as SessionRow[]).map(hydrate);
+    recent(profile, limit) {
+      return (selRecent.all(profile, limit) as unknown as SessionRow[]).map(hydrate);
     },
     resetRunning(now = Date.now()) {
       return transaction(db, () => Number(resetRun.run(now).changes));
+    },
+    relabelProfile(from, to, now = Date.now()) {
+      return Number(relabel.run(to, now, from).changes);
     },
   };
 }

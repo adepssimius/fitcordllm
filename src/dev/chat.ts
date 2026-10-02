@@ -14,13 +14,14 @@ import { createInterface } from "node:readline/promises";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { loadCore, credentialSource } from "../config.js";
+import { loadConfig, credentialSource } from "../config.js";
 import { createLogger } from "../logger.js";
 import { openStore } from "../store/index.js";
-import { SessionManager } from "../session/manager.js";
+import { SessionManager, recoverInterrupted } from "../session/manager.js";
 import { QuotaGuard } from "../quota/budget.js";
 import { Workspaces } from "../git/workspaces.js";
 import { prepareExternalTools } from "../suunto/mcp.js";
+import { ensureSuuntool } from "../suunto/install.js";
 
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
@@ -28,7 +29,7 @@ const YELLOW = "\x1b[33m";
 const RED = "\x1b[31m";
 
 async function main(): Promise<void> {
-  const cfg = loadCore();
+  const cfg = loadConfig();
   const log = createLogger({ level: cfg.LOG_LEVEL, pretty: true });
 
   if (credentialSource(cfg) === "none") {
@@ -53,11 +54,11 @@ async function main(): Promise<void> {
     onCooldownCleared: () => console.log(`${DIM}[quota] cooldown cleared${RESET}`),
   });
   const workspaces = new Workspaces(cfg, log);
-  const external = await prepareExternalTools(cfg, log);
+  const external = await prepareExternalTools(cfg, log, await ensureSuuntool(cfg, log));
   const manager = new SessionManager({ cfg, log, store, workspaces, external, quota });
 
   // Boot recovery before accepting input, exactly as the pod will.
-  const recovered = manager.recover();
+  const recovered = recoverInterrupted(store, log);
   if (recovered.interrupted.length > 0) {
     console.log(
       `${YELLOW}${recovered.interrupted.length} session(s) had a turn interrupted by a restart; it was not retried.${RESET}`,
@@ -70,7 +71,7 @@ async function main(): Promise<void> {
   const threadId = process.env.CHAT_THREAD_ID ?? "repl-thread";
   let session = open(threadId);
 
-  console.log(`${DIM}session ${session.id.slice(0, 8)} · branch ${session.branch} · db ${cfg.sqlitePath}${RESET}`);
+  console.log(`${DIM}profile ${cfg.name} · session ${session.id.slice(0, 8)} · branch ${session.branch} · db ${cfg.sqlitePath}${RESET}`);
   console.log(
     `${DIM}model ${cfg.AGENT_MODEL ?? "default"} · auth ${credentialSource(cfg)} · ` +
       `suunto ${external.suuntoSource ?? "off"} · /new /stop /status /stats /quit${RESET}\n`,

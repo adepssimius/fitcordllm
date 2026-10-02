@@ -10,15 +10,14 @@ import {
   type TextChannel,
   type ThreadChannel,
 } from "discord.js";
-import type { CoreConfig, DiscordConfig } from "../config.js";
+import type { Config, CoreConfig, DiscordConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import type { Store } from "../store/index.js";
-import type { Workspaces } from "../git/workspaces.js";
 import { localStamp, pollAnswerContent } from "../agent/prompts.js";
-import { SessionManager } from "../session/manager.js";
+import type { Profile, Profiles } from "../profile.js";
 import { ThreadQueue } from "../session/queue.js";
 import type { PollRequest, Schedule, Session } from "../session/types.js";
-import { checkActor } from "./authz.js";
+import { checkActor, type AuthzConfig } from "./authz.js";
 import { classifyContent, route, type RouteDecision } from "./router.js";
 import { buildThreadContext, type ContextMessage } from "./context.js";
 import { startTyping } from "./typing.js";
@@ -31,8 +30,8 @@ export interface BotDeps {
   readonly discord: DiscordConfig;
   readonly log: Logger;
   readonly store: Store;
-  readonly manager: SessionManager;
-  readonly workspaces: Workspaces;
+  /** Everyone this bot serves. The channel a message arrives in decides whose it is. */
+  readonly profiles: Profiles;
 }
 
 /** One unit of work on a session's lane. */
@@ -68,6 +67,15 @@ const THREADS_WORDS = new Set(["threads", "status"]);
 const SCHEDULES_WORDS = new Set(["schedules", "briefs"]);
 
 const BRIEF_FOOTER = "-# Reply to this message, or start a thread from it, to continue.";
+
+/** A profile's answer to "who may talk here" — see authz.ts. */
+function authzOf(cfg: Config): AuthzConfig {
+  return {
+    userIds: cfg.DISCORD_CHAT_USER_IDS,
+    roleIds: cfg.DISCORD_CHAT_ROLE_IDS,
+    channelGated: cfg.DISCORD_CHAT_CHANNEL_IDS.length > 0,
+  };
+}
 
 export class DiscordBot {
   private readonly client: Client;
@@ -114,9 +122,11 @@ export class DiscordBot {
       onError: (key, e) => deps.log.error({ err: e, thread: key }, "turn handler failed"),
     });
 
-    deps.manager.onRunScheduleNow((s) => {
-      void this.postBrief(s).catch((e: unknown) => deps.log.error({ err: e, schedule: s.name }, "brief failed"));
-    });
+    for (const p of deps.profiles.all) {
+      p.manager.onRunScheduleNow((s) => {
+        void this.postBrief(s).catch((e: unknown) => deps.log.error({ err: e, schedule: s.name }, "brief failed"));
+      });
+    }
   }
 
   /**
@@ -210,7 +220,7 @@ export class DiscordBot {
   }
 
   private async onMessage(message: Message): Promise<void> {
-    const { discord, log, store, manager } = this.deps;
+    const { discord, log, store, profiles } = this.deps;
 
     const inThread = message.channel.isThread();
 
@@ -238,7 +248,7 @@ export class DiscordBot {
       mentioned,
       channelId: message.channelId,
       parentChannelId: inThread ? (message.channel.parentId ?? undefined) : undefined,
-      allowedChannels: discord.DISCORD_CHAT_CHANNEL_IDS,
+      allowedChannels: profiles.channels,
       repliesToBrief: briefSession !== undefined,
     });
 
@@ -257,11 +267,23 @@ export class DiscordBot {
     const guildId = message.guild?.id;
     if (!guildId) return;
 
+    // Whose conversation this is. A known session says; otherwise the channel
+    // it arrived in (the parent, for a thread) does.
+    const session0 = known ?? briefSession;
+    const profile = session0
+      ? profiles.named(session0.profile)
+      : profiles.forChannel(inThread ? (message.channel.parentId ?? message.channelId) : message.channelId);
+    if (!profile) {
+      log.info({ channel: message.channelId }, "mentioned in a channel no profile owns");
+      return;
+    }
+    const { manager } = profile;
+
     // Authorisation is checked HERE, before any thread is opened: refusing
     // afterwards would let anyone who can see the channel make the bot open
-    // threads by being unwelcome at it.
-    const actor = checkActor(
-      { userIds: discord.DISCORD_CHAT_USER_IDS, roleIds: discord.DISCORD_CHAT_ROLE_IDS },
+    // threads by being unwelcome at it. The allowlist is the profile's own:
+    // being allowed in one person's channel says nothing about another's.
+    const actor = checkActor(authzOf(profile.cfg),
       {
         userId: message.author.id,
         roleIds: message.member ? [...message.member.roles.cache.keys()] : [],
@@ -302,11 +324,11 @@ export class DiscordBot {
 
     // Answered from the database: no thread, no model turn, nothing spent.
     if (decision.action === "open" && THREADS_WORDS.has(word)) {
-      await this.replyChunks(message, await this.threadsReport());
+      await this.replyChunks(message, await this.threadsReport(profile));
       return;
     }
     if (decision.action === "open" && SCHEDULES_WORDS.has(word)) {
-      await this.replyChunks(message, this.schedulesReport());
+      await this.replyChunks(message, this.schedulesReport(profile));
       return;
     }
 
@@ -323,7 +345,7 @@ export class DiscordBot {
       return;
     }
 
-    const bound = await this.establish(decision, message, known, briefSession, guildId, content);
+    const bound = await this.establish(profile, decision, message, known, briefSession, guildId, content);
     if (!bound) return;
     const { session, thread } = bound;
 
@@ -378,6 +400,7 @@ export class DiscordBot {
    * or continuing as the decision requires.
    */
   private async establish(
+    profile: Profile,
     decision: Exclude<RouteDecision, { action: "ignore" }>,
     message: Message,
     known: Session | undefined,
@@ -385,7 +408,8 @@ export class DiscordBot {
     guildId: string,
     title: string,
   ): Promise<{ session: Session; thread: ThreadChannel; adopted: boolean } | undefined> {
-    const { log, manager } = this.deps;
+    const { log } = this.deps;
+    const { manager } = profile;
 
     if (decision.action === "continue" && known) {
       return { session: known, thread: message.channel as ThreadChannel, adopted: false };
@@ -425,7 +449,10 @@ export class DiscordBot {
       openedBy: message.author.id,
       title: title.slice(0, 90) || "chat",
     });
-    log.info({ sessionId: session.id, threadId: thread.id, branch: session.branch }, "chat session opened");
+    log.info(
+      { sessionId: session.id, profile: profile.cfg.name, threadId: thread.id, branch: session.branch },
+      "chat session opened",
+    );
     return { session, thread, adopted: false };
   }
 
@@ -519,15 +546,18 @@ export class DiscordBot {
     const messageId = answer.poll.messageId;
     const poll = store.polls.byMessage(messageId);
     if (!poll || poll.answeredAt !== null) return; // not ours, or already answered
+    const session = store.sessions.byId(poll.sessionId);
+    if (!session) return;
+    const { cfg: owner } = this.deps.profiles.named(session.profile);
 
-    let allowed = discord.DISCORD_CHAT_USER_IDS.includes(userId);
-    if (!allowed && discord.DISCORD_CHAT_ROLE_IDS.length > 0) {
+    // A poll in a private channel can only be tapped by someone in it, so a
+    // channel-gated profile needs no further check; an allowlist does.
+    const authz = authzOf(owner);
+    let allowed = checkActor(authz, { userId, roleIds: [] }).allowed;
+    if (!allowed && authz.roleIds.length > 0) {
       const guild = await this.client.guilds.fetch(discord.DISCORD_GUILD_ID).catch(() => null);
       const member = await guild?.members.fetch(userId).catch(() => null);
-      allowed = checkActor(
-        { userIds: discord.DISCORD_CHAT_USER_IDS, roleIds: discord.DISCORD_CHAT_ROLE_IDS },
-        { userId, roleIds: member ? [...member.roles.cache.keys()] : [] },
-      ).allowed;
+      allowed = checkActor(authz, { userId, roleIds: member ? [...member.roles.cache.keys()] : [] }).allowed;
     }
     if (!allowed) {
       // Anyone who can see the channel can tap a poll. Their tap must not
@@ -679,9 +709,10 @@ export class DiscordBot {
    * shipped, and how far behind the base branch it is. The answer to "where
    * did I leave that?", from the database and the clones, at no model cost.
    */
-  private async threadsReport(): Promise<string> {
-    const { cfg, store, workspaces } = this.deps;
-    const sessions = store.sessions.recent(25);
+  private async threadsReport(profile: Profile): Promise<string> {
+    const { store } = this.deps;
+    const { cfg, workspaces } = profile;
+    const sessions = store.sessions.recent(cfg.name, 25);
     if (sessions.length === 0) return "No threads yet. Mention me with a question to start one.";
 
     const lines: string[] = [];
@@ -721,9 +752,10 @@ export class DiscordBot {
     return `${head}\n${lines.join("\n")}`;
   }
 
-  private schedulesReport(): string {
-    const { cfg, store } = this.deps;
-    const all = store.schedules.list();
+  private schedulesReport(profile: Profile): string {
+    const { store } = this.deps;
+    const { cfg } = profile;
+    const all = store.schedules.list(cfg.name);
     if (all.length === 0) {
       return "No scheduled briefs. Ask me in a thread — e.g. “send me the morning brief every day at 6”.";
     }
@@ -745,12 +777,14 @@ export class DiscordBot {
    * is already filed under the thread that does not exist yet.
    */
   async postBrief(schedule: Schedule): Promise<void> {
-    const { discord, log, manager } = this.deps;
+    const { discord, log, profiles } = this.deps;
+    const profile = profiles.named(schedule.profile);
+    const { manager } = profile;
 
     const channelId =
-      schedule.channelId ?? discord.DISCORD_BRIEF_CHANNEL_ID ?? discord.DISCORD_CHAT_CHANNEL_IDS[0];
+      schedule.channelId ?? profile.cfg.DISCORD_BRIEF_CHANNEL_ID ?? profile.cfg.DISCORD_CHAT_CHANNEL_IDS[0];
     if (!channelId) {
-      log.error({ schedule: schedule.name }, "no channel for briefs — set DISCORD_BRIEF_CHANNEL_ID");
+      log.error({ schedule: schedule.name, profile: schedule.profile }, "no channel for briefs — set DISCORD_BRIEF_CHANNEL_ID");
       return;
     }
     const channel = await this.client.channels.fetch(channelId).catch(() => null);
@@ -794,7 +828,8 @@ export class DiscordBot {
   }
 
   private async runBrief(head: Extract<Incoming, { kind: "brief" }>): Promise<void> {
-    const { discord, log, store, manager } = this.deps;
+    const { discord, log, store } = this.deps;
+    const { manager } = this.deps.profiles.named(head.session.profile);
     const streamer = new ThreadStreamer(
       head.channel,
       { intervalMs: discord.DISCORD_EDIT_INTERVAL_MS, maxMessages: discord.DISCORD_MAX_MESSAGES_PER_TURN },
@@ -837,7 +872,8 @@ export class DiscordBot {
     head: Extract<Incoming, { kind: "chat" }>,
     rest: readonly Extract<Incoming, { kind: "chat" }>[],
   ): Promise<void> {
-    const { discord, log, store, manager } = this.deps;
+    const { discord, log, store } = this.deps;
+    const { manager } = this.deps.profiles.named(head.session.profile);
     const streamer = new ThreadStreamer(head.thread, {
       intervalMs: discord.DISCORD_EDIT_INTERVAL_MS,
       maxMessages: discord.DISCORD_MAX_MESSAGES_PER_TURN,

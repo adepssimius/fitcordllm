@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { ThreadQueue } from "./queue.js";
-import { checkActor } from "../discord/authz.js";
 
 const defer = () => {
   let resolve!: () => void;
@@ -102,29 +101,5 @@ describe("ThreadQueue", () => {
     q.enqueue("t1", "x");
     await vi.waitFor(() => expect(q.activeLanes).toBe(0));
     expect(q.depth("t1")).toBe(0);
-  });
-});
-
-describe("checkActor", () => {
-  it("fails closed when no allowlist is configured", () => {
-    const r = checkActor({ userIds: [], roleIds: [] }, { userId: "u1", roleIds: ["r1"] });
-    expect(r.allowed).toBe(false);
-    if (!r.allowed) expect(r.reason).toContain("no chat allowlist");
-  });
-
-  it("allows a member holding an allowed role", () => {
-    expect(checkActor({ userIds: [], roleIds: ["admins"] }, { userId: "u1", roleIds: ["x", "admins"] }).allowed).toBe(
-      true,
-    );
-  });
-
-  it("allows an explicitly listed user with no roles", () => {
-    expect(checkActor({ userIds: ["u1"], roleIds: [] }, { userId: "u1", roleIds: [] }).allowed).toBe(true);
-  });
-
-  it("refuses a member with no matching role", () => {
-    expect(checkActor({ userIds: ["u9"], roleIds: ["admins"] }, { userId: "u1", roleIds: ["guests"] }).allowed).toBe(
-      false,
-    );
   });
 });

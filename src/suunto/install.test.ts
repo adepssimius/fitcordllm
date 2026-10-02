@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadCore } from "../config.js";
+import { loadConfig } from "../config.js";
 import { checksumFor, pickAsset, type ReleaseAsset } from "./install.js";
 import { sessionJson } from "./mcp.js";
 
@@ -78,7 +78,7 @@ describe("checksumFor", () => {
 
 describe("sessionJson", () => {
   it("writes the field names suuntool reads", () => {
-    const cfg = loadCore({
+    const cfg = loadConfig({
       DATA_DIR: "/tmp/fitcord-test",
       SUUNTOOL_SESSION_KEY: "k",
       SUUNTOOL_USERNAME: "runner",
@@ -97,7 +97,7 @@ describe("sessionJson", () => {
   });
 
   it("survives a quote in a value, which the shell version had to escape by hand", () => {
-    const cfg = loadCore({ DATA_DIR: "/tmp/fitcord-test", SUUNTOOL_SESSION_KEY: 'a"b\\c' } as NodeJS.ProcessEnv);
+    const cfg = loadConfig({ DATA_DIR: "/tmp/fitcord-test", SUUNTOOL_SESSION_KEY: 'a"b\\c' } as NodeJS.ProcessEnv);
     expect((JSON.parse(sessionJson(cfg)) as { sessionkey: string }).sessionkey).toBe('a"b\\c');
   });
 });

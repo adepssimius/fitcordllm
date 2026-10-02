@@ -3,11 +3,12 @@ import type { Schedule } from "../session/types.js";
 import { plan } from "./scheduler.js";
 
 const sixAm = new Date("2026-10-02T10:00:00Z").getTime(); // 06:00 New York
-const opts = { timeZone: "America/New_York", maxLateMs: 3 * 3_600_000 };
+const opts = { timeZoneFor: () => "America/New_York", maxLateMs: 3 * 3_600_000 };
 
 function schedule(over: Partial<Schedule> = {}): Schedule {
   return {
     id: 1,
+    profile: "default",
     name: "morning-brief",
     cron: "0 6 * * *",
     prompt: "Run the daily brief.",
@@ -46,5 +47,15 @@ describe("plan", () => {
   it("gives a schedule with a broken expression no next run instead of throwing", () => {
     const [p] = plan([schedule({ cron: "not a cron" })], sixAm, opts);
     expect(p?.next).toBeNull();
+  });
+});
+
+describe("profiles keep their own clocks", () => {
+  it("computes the next run in the owning profile's zone", () => {
+    const zones: Record<string, string> = { east: "America/New_York", west: "America/Los_Angeles" };
+    const due = [schedule({ id: 1, profile: "east" }), schedule({ id: 2, profile: "west" })];
+    const out = plan(due, sixAm, { timeZoneFor: (s) => zones[s.profile]!, maxLateMs: 3_600_000 });
+    expect(new Date(out[0]!.next!).toISOString()).toBe("2026-10-03T10:00:00.000Z"); // 06:00 New York
+    expect(new Date(out[1]!.next!).toISOString()).toBe("2026-10-02T13:00:00.000Z"); // 06:00 Los Angeles, today
   });
 });

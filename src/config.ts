@@ -89,37 +89,6 @@ const CoreSchema = z.object({
   QUOTA_WARN_UTILIZATION: z.coerce.number().min(0).max(1).default(0.8),
 
   /**
-   * The repository each thread works in, as `owner/name` on GitHub.
-   * GIT_REMOTE_URL overrides the derived URL — tests and local development
-   * point it at a bare repository on disk.
-   */
-  GIT_REPO: optionalString,
-  GIT_REMOTE_URL: optionalString,
-  /** Unset means whatever the remote's HEAD points at. */
-  GIT_BASE_BRANCH: optionalString,
-  GIT_BRANCH_PREFIX: z.string().default("fitcord"),
-  /** Held by the bot process only. No agent tool or subprocess receives it. */
-  GITHUB_TOKEN: optionalString,
-  GIT_AUTHOR_NAME: z.string().default("fitcordllm"),
-  GIT_AUTHOR_EMAIL: z.string().default("fitcordllm@users.noreply.github.com"),
-  GIT_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
-  /**
-   * A workspace with nothing unshipped is deleted after this long without a
-   * turn. The thread itself stays resumable: the clone is recreated at the
-   * same path the next time someone writes in it.
-   */
-  WORKSPACE_IDLE_DAYS: z.coerce.number().int().positive().default(14),
-  /**
-   * Repository instructions appended to the system prompt, relative to the
-   * workspace root. Skipped when the file is missing or a CLAUDE.md exists
-   * (Claude Code loads that one by itself).
-   */
-  REPO_INSTRUCTIONS_FILE: z.string().default("AGENTS.md"),
-
-  /** IANA zone for schedules and for the date the agent is told it is. */
-  BOT_TIMEZONE: z.string().default("UTC"),
-
-  /**
    * Where the Suunto CLI comes from. The default is upstream; point
    * SUUNTOOL_REPO at a fork to run a build with a feature upstream lacks. The
    * release for SUUNTOOL_VERSION is downloaded once and cached under DATA_DIR.
@@ -132,17 +101,13 @@ const CoreSchema = z.object({
   /** Sent when resolving releases — only needed for a private fork. */
   SUUNTOOL_GITHUB_TOKEN: optionalString,
   SUUNTOOL_MCP_ARGS: z.string().default("mcp --allow-write --allow-destructive"),
-  /** The session key is the secret; the rest are cosmetic or TOTP inputs. */
-  SUUNTOOL_SESSION_KEY: optionalString,
-  SUUNTOOL_EMAIL: optionalString,
-  SUUNTOOL_USERNAME: optionalString,
-  SUUNTOOL_USER_KEY: optionalString,
-  SUUNTOOL_COUNTRY: optionalString,
-  SUUNTOOL_OFFSET_MS: z.coerce.number().int().default(0),
-
-  LIFTOSAUR_API_KEY: optionalString,
-  LIFTOSAUR_MCP_URL: z.string().default("https://www.liftosaur.com/mcp"),
-
+  GIT_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  /**
+   * A workspace with nothing unshipped is deleted after this long without a
+   * turn. The thread itself stays resumable: the clone is recreated at the
+   * same path the next time someone writes in it.
+   */
+  WORKSPACE_IDLE_DAYS: z.coerce.number().int().positive().default(14),
   /** How often the scheduler looks for due briefs. */
   SCHEDULE_TICK_MS: z.coerce.number().int().positive().default(30_000),
   /**
@@ -170,25 +135,95 @@ const CoreSchema = z.object({
 const DiscordSchema = z.object({
   DISCORD_BOT_TOKEN: z.string().min(1),
   DISCORD_GUILD_ID: z.string().min(1),
-  /** Who may cause an agent turn. Startup refuses if both are empty. */
-  DISCORD_CHAT_ROLE_IDS: csv,
-  DISCORD_CHAT_USER_IDS: csv,
-  /** Where an @mention opens a thread. Empty means any channel. */
-  DISCORD_CHAT_CHANNEL_IDS: csv,
-  /** Where scheduled briefs are posted unless the schedule names a channel. */
-  DISCORD_BRIEF_CHANNEL_ID: optionalString,
   DISCORD_EDIT_INTERVAL_MS: z.coerce.number().int().positive().default(2000),
   DISCORD_MAX_MESSAGES_PER_TURN: z.coerce.number().int().positive().default(30),
   CHAT_PENDING_MAX: z.coerce.number().int().positive().default(5),
 });
+
+
+/**
+ * One person's setup. A single bot process serves several of these: each has
+ * its own Discord channel, repository, Suunto account and (optionally)
+ * Liftosaur, and they share everything else — the bot identity, the Claude
+ * subscription and its quota guard, the database and the volume.
+ *
+ * Every field here can be set two ways: plainly (`GIT_REPO`), which is the
+ * default for every profile, or per profile (`PROFILE_<NAME>_GIT_REPO`), which
+ * wins for that profile. `FITCORD_PROFILES` names the profiles; unset, there is
+ * one profile called `default` read from the plain variables, which is how a
+ * single-person deployment was configured before profiles existed.
+ */
+const ProfileSchema = z.object({
+  /**
+   * The repository each thread works in, as `owner/name` on GitHub.
+   * GIT_REMOTE_URL overrides the derived URL — tests and local development
+   * point it at a bare repository on disk.
+   */
+  GIT_REPO: optionalString,
+  GIT_REMOTE_URL: optionalString,
+  /** Unset means whatever the remote's HEAD points at. */
+  GIT_BASE_BRANCH: optionalString,
+  GIT_BRANCH_PREFIX: z.string().default("fitcord"),
+  /** Held by the bot process only. No agent tool or subprocess receives it. */
+  GITHUB_TOKEN: optionalString,
+  GIT_AUTHOR_NAME: z.string().default("fitcordllm"),
+  GIT_AUTHOR_EMAIL: z.string().default("fitcordllm@users.noreply.github.com"),
+  /**
+   * Repository instructions appended to the system prompt, relative to the
+   * workspace root. Skipped when the file is missing or a CLAUDE.md exists
+   * (Claude Code loads that one by itself).
+   */
+  REPO_INSTRUCTIONS_FILE: z.string().default("AGENTS.md"),
+
+  /** IANA zone for schedules and for the date the agent is told it is. */
+  BOT_TIMEZONE: z.string().default("UTC"),
+
+  /** The session key is the secret; the rest are cosmetic or TOTP inputs. */
+  SUUNTOOL_SESSION_KEY: optionalString,
+  SUUNTOOL_EMAIL: optionalString,
+  SUUNTOOL_USERNAME: optionalString,
+  SUUNTOOL_USER_KEY: optionalString,
+  SUUNTOOL_COUNTRY: optionalString,
+  SUUNTOOL_OFFSET_MS: z.coerce.number().int().default(0),
+
+  LIFTOSAUR_API_KEY: optionalString,
+  LIFTOSAUR_MCP_URL: z.string().default("https://www.liftosaur.com/mcp"),
+
+  /**
+   * Who may cause an agent turn. Optional when the profile has its own
+   * channel: Discord's permissions on a private channel already decide who
+   * can post there. Required when it answers in any channel.
+   */
+  DISCORD_CHAT_ROLE_IDS: csv,
+  DISCORD_CHAT_USER_IDS: csv,
+  /**
+   * The channel(s) this profile answers in. With one profile, empty means any
+   * channel; with several, a profile with no channel owns nothing.
+   */
+  DISCORD_CHAT_CHANNEL_IDS: csv,
+  /** Where scheduled briefs are posted unless the schedule names a channel. */
+  DISCORD_BRIEF_CHANNEL_ID: optionalString,
+});
+
+type ProfileParsed = z.infer<typeof ProfileSchema>;
+
+export interface ProfileConfig extends ProfileParsed {
+  /** `default`, or a name from FITCORD_PROFILES. Stored on every session and schedule. */
+  readonly name: string;
+  /** Where the bot's own git calls fetch from and push to. */
+  readonly remoteUrl: string | undefined;
+}
+
+/** The shared settings plus one profile's — what everything working on behalf of one person takes. */
+export type Config = CoreConfig & ProfileConfig;
+
+const PROFILE_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
 type CoreParsed = z.infer<typeof CoreSchema>;
 
 export interface CoreConfig extends CoreParsed {
   readonly sqlitePath: string;
   readonly workspacesDir: string;
-  /** Where the bot's own git calls fetch from and push to. */
-  readonly remoteUrl: string | undefined;
 }
 
 export type DiscordConfig = z.infer<typeof DiscordSchema>;
@@ -211,18 +246,10 @@ export function loadCore(env: NodeJS.ProcessEnv = process.env): CoreConfig {
   const parsed = CoreSchema.safeParse(env);
   if (!parsed.success) throw new ConfigError(`invalid configuration:\n${describe(parsed.error)}`);
   const c = parsed.data;
-
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: c.BOT_TIMEZONE });
-  } catch {
-    throw new ConfigError(`invalid configuration:\n  BOT_TIMEZONE: '${c.BOT_TIMEZONE}' is not an IANA time zone`);
-  }
-
   const cfg: CoreConfig = {
     ...c,
     sqlitePath: c.SQLITE_PATH ?? join(c.DATA_DIR, "fitcordllm.db"),
     workspacesDir: c.WORKSPACES_DIR ?? join(c.DATA_DIR, "threads"),
-    remoteUrl: c.GIT_REMOTE_URL ?? (c.GIT_REPO ? `https://github.com/${c.GIT_REPO}.git` : undefined),
   };
   if (env === process.env) cached = cfg;
   return cfg;
@@ -230,6 +257,70 @@ export function loadCore(env: NodeJS.ProcessEnv = process.env): CoreConfig {
 
 export function resetConfigCache(): void {
   cached = undefined;
+}
+
+/** `PROFILE_<NAME>_` with the name upper-cased and dashes turned to underscores. */
+export function profileEnvPrefix(name: string): string {
+  return `PROFILE_${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_`;
+}
+
+/**
+ * Reads every profile. A per-profile variable wins over the plain one, so the
+ * plain variables are the defaults shared by all profiles.
+ */
+export function loadProfiles(env: NodeJS.ProcessEnv = process.env): ProfileConfig[] {
+  const names = (env.FITCORD_PROFILES ?? "")
+    .split(",")
+    .map((n) => n.trim())
+    .filter((n) => n.length > 0);
+  const list = names.length > 0 ? names : ["default"];
+
+  const seen = new Set<string>();
+  return list.map((name) => {
+    if (!PROFILE_NAME.test(name)) {
+      throw new ConfigError(`invalid configuration:\n  FITCORD_PROFILES: '${name}' — lowercase letters, digits and dashes only`);
+    }
+    if (seen.has(name)) throw new ConfigError(`invalid configuration:\n  FITCORD_PROFILES: '${name}' is listed twice`);
+    seen.add(name);
+
+    const prefix = names.length > 0 ? profileEnvPrefix(name) : null;
+    const raw: Record<string, string | undefined> = {};
+    for (const key of Object.keys(ProfileSchema.shape)) {
+      const own = prefix ? env[`${prefix}${key}`] : undefined;
+      raw[key] = own !== undefined && own !== "" ? own : env[key];
+    }
+
+    const parsed = ProfileSchema.safeParse(raw);
+    if (!parsed.success) throw new ConfigError(`invalid configuration for profile '${name}':\n${describe(parsed.error)}`);
+    const p = parsed.data;
+
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: p.BOT_TIMEZONE });
+    } catch {
+      throw new ConfigError(
+        `invalid configuration for profile '${name}':\n  BOT_TIMEZONE: '${p.BOT_TIMEZONE}' is not an IANA time zone`,
+      );
+    }
+
+    return {
+      ...p,
+      name,
+      remoteUrl: p.GIT_REMOTE_URL ?? (p.GIT_REPO ? `https://github.com/${p.GIT_REPO}.git` : undefined),
+    };
+  });
+}
+
+/** The shared settings merged with one profile's. */
+export function configFor(core: CoreConfig, profile: ProfileConfig): Config {
+  return { ...core, ...profile };
+}
+
+/** Shared settings plus the first (or only) profile — for the dev REPL and tests. */
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  const core = loadCore(env);
+  const first = loadProfiles(env)[0];
+  if (!first) throw new ConfigError("no profiles configured");
+  return configFor(core, first);
 }
 
 export function requireDiscord(env: NodeJS.ProcessEnv = process.env): DiscordConfig {
@@ -248,7 +339,7 @@ export function requireDiscord(env: NodeJS.ProcessEnv = process.env): DiscordCon
  * subprocess is the thing that uses it.
  */
 export function sanitizedEnv(
-  cfg: CoreConfig,
+  cfg: Config,
   extra: Record<string, string> = {},
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {

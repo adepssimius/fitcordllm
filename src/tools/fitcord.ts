@@ -1,6 +1,6 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import type { CoreConfig } from "../config.js";
+import type { Config } from "../config.js";
 import { FITCORD_SERVER, localStamp } from "../agent/prompts.js";
 import type { ShipResult, SyncResult, WorkspaceRef, Workspaces } from "../git/workspaces.js";
 import { checkCron } from "../schedule/cron.js";
@@ -21,7 +21,7 @@ import type { Store } from "../store/index.js";
  */
 
 export interface FitcordToolDeps {
-  readonly cfg: CoreConfig;
+  readonly cfg: Config;
   readonly store: Store;
   readonly workspaces: Workspaces;
   readonly session: WorkspaceRef;
@@ -258,7 +258,7 @@ export function createFitcordServer(deps: FitcordToolDeps) {
     "List the scheduled briefs.",
     {},
     async () => {
-      const all = store.schedules.list();
+      const all = store.schedules.list(cfg.name);
       if (all.length === 0) return text("No schedules.");
       return text(all.map((s) => describeSchedule(s, tz)).join("\n\n"));
     },
@@ -298,6 +298,7 @@ export function createFitcordServer(deps: FitcordToolDeps) {
       const check = checkCron(a.cron, tz, cfg.SCHEDULE_MIN_INTERVAL_MIN);
       if (!check.ok) return failure(`Not scheduled: ${check.reason}.`);
       const saved = store.schedules.upsert({
+        profile: cfg.name,
         name: a.name,
         cron: a.cron.trim(),
         prompt: a.prompt,
@@ -315,7 +316,7 @@ export function createFitcordServer(deps: FitcordToolDeps) {
     "Remove a scheduled brief by name. Briefs it already posted are unaffected.",
     { name: z.string().min(1) },
     async (a) =>
-      store.schedules.delete(a.name)
+      store.schedules.delete(cfg.name, a.name)
         ? text(`Schedule \`${a.name}\` removed.`)
         : failure(`There is no schedule named \`${a.name}\`.`),
   );
@@ -325,7 +326,7 @@ export function createFitcordServer(deps: FitcordToolDeps) {
     "Post a scheduled brief right now, without changing when it next runs. Use it to test a schedule.",
     { name: z.string().min(1) },
     async (a) => {
-      const s = store.schedules.byName(a.name);
+      const s = store.schedules.byName(cfg.name, a.name);
       if (!s) return failure(`There is no schedule named \`${a.name}\`.`);
       if (!deps.runScheduleNow) return failure("Briefs can only be posted when the bot is connected to Discord.");
       deps.runScheduleNow(s);

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getSessionInfo, renameSession, type SDKRateLimitInfo } from "@anthropic-ai/claude-agent-sdk";
-import type { CoreConfig } from "../config.js";
+import type { Config } from "../config.js";
 import type { Logger } from "../logger.js";
 import { buildOptions } from "../agent/options.js";
 import {
@@ -41,7 +41,8 @@ import type { NewToolCall, PollRequest, Schedule, Session, TurnTrigger } from ".
  */
 
 export interface ManagerDeps {
-  readonly cfg: CoreConfig;
+  /** Shared settings plus this manager's profile. One manager per profile. */
+  readonly cfg: Config;
   readonly log: Logger;
   readonly store: Store;
   readonly workspaces: Workspaces;
@@ -142,6 +143,7 @@ export class SessionManager {
     const title = input.title.slice(0, 100);
     return store.sessions.create({
       id,
+      profile: cfg.name,
       kind,
       guildId: input.guildId,
       channelId: input.channelId,
@@ -476,39 +478,51 @@ export class SessionManager {
     this.deps.store.turns.setDiscordMessage(turnId, messageId);
   }
 
-  /**
-   * Boot recovery. Interrupted turns are never retried automatically: the
-   * question may be stale, and a restart loop would replay every thread
-   * against the quota. The sessions are returned so the bot can say so in
-   * each thread instead of leaving a question hanging unanswered.
-   */
-  recover(): { interrupted: readonly Session[] } {
-    const { store, log } = this.deps;
-    const orphans = store.turns.running();
-    store.turns.markInterrupted(orphans.map((t) => t.id));
-    const reset = store.sessions.resetRunning();
-
-    const sessions = [...new Set(orphans.map((t) => t.sessionId))]
-      .map((id) => store.sessions.byId(id))
-      .filter((s): s is Session => s !== undefined);
-
-    if (orphans.length > 0) {
-      log.warn({ interrupted: orphans.length, sessionsReset: reset }, "recovered from an unclean shutdown");
-    }
-    return { interrupted: sessions };
+  /** Whose conversations this manager runs. */
+  get profile(): string {
+    return this.deps.cfg.name;
   }
+}
 
-  /** Removes clones that are idle and hold nothing unshipped. */
-  async sweepWorkspaces(): Promise<void> {
-    const { store, workspaces } = this.deps;
-    await workspaces.sweep((id) => {
-      const s = store.sessions.byId(id);
-      if (!s) return undefined;
-      // A running session is never idle, whatever its timestamps say.
-      const lastActiveAt = s.status === "running" ? Date.now() : (s.lastTurnAt ?? s.createdAt);
-      return { branch: s.branch, lastActiveAt };
-    });
+/**
+ * Boot recovery, across every profile. Interrupted turns are never retried
+ * automatically: the question may be stale, and a restart loop would replay
+ * every thread against the quota. The sessions are returned so the bot can say
+ * so in each thread instead of leaving a question hanging unanswered.
+ */
+export function recoverInterrupted(store: Store, log: Logger): { interrupted: readonly Session[] } {
+  const orphans = store.turns.running();
+  store.turns.markInterrupted(orphans.map((t) => t.id));
+  const reset = store.sessions.resetRunning();
+
+  const sessions = [...new Set(orphans.map((t) => t.sessionId))]
+    .map((id) => store.sessions.byId(id))
+    .filter((s): s is Session => s !== undefined);
+
+  if (orphans.length > 0) {
+    log.warn({ interrupted: orphans.length, sessionsReset: reset }, "recovered from an unclean shutdown");
   }
+  return { interrupted: sessions };
+}
+
+/**
+ * Removes clones that are idle and hold nothing unshipped, across every
+ * profile. Each clone is inspected by the Workspaces of the profile that owns
+ * its session, since "unshipped" is measured against that profile's base
+ * branch.
+ */
+export async function sweepWorkspaces(
+  store: Store,
+  byProfile: ReadonlyMap<string, Workspaces>,
+  fallback: Workspaces,
+): Promise<void> {
+  await fallback.sweep((id) => {
+    const s = store.sessions.byId(id);
+    if (!s) return undefined;
+    // A running session is never idle, whatever its timestamps say.
+    const lastActiveAt = s.status === "running" ? Date.now() : (s.lastTurnAt ?? s.createdAt);
+    return { branch: s.branch, lastActiveAt, workspaces: byProfile.get(s.profile) ?? fallback };
+  });
 }
 
 function describeFailure(error: string, aborted: boolean): string {

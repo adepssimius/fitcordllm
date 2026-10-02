@@ -1,9 +1,9 @@
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
-import type { CoreConfig } from "../config.js";
+import type { Config } from "../config.js";
 import type { Logger } from "../logger.js";
-import { ensureSuuntool } from "./install.js";
+import type { SuuntoolInstall } from "./install.js";
 
 /**
  * The MCP servers that reach the person's own accounts, built once at startup.
@@ -28,7 +28,7 @@ export interface ExternalTools {
 }
 
 /** The shape suuntool reads; field names are its own. */
-export function sessionJson(cfg: CoreConfig, now: Date = new Date()): string {
+export function sessionJson(cfg: Config, now: Date = new Date()): string {
   return `${JSON.stringify(
     {
       sessionkey: cfg.SUUNTOOL_SESSION_KEY ?? "",
@@ -50,36 +50,44 @@ export function sessionJson(cfg: CoreConfig, now: Date = new Date()): string {
  * Rewritten on every start, so rotating the key is "change the secret and
  * restart" — there is no stale copy on the volume to outlive it.
  */
-async function writeSession(cfg: CoreConfig): Promise<string> {
-  const path = join(cfg.DATA_DIR, "suuntool", "session.json");
+async function writeSession(cfg: Config): Promise<string> {
+  const path = join(cfg.DATA_DIR, "suuntool", cfg.name, "session.json");
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   await writeFile(path, sessionJson(cfg), { mode: 0o600 });
   await chmod(path, 0o600);
   return path;
 }
 
-export async function prepareExternalTools(cfg: CoreConfig, log: Logger): Promise<ExternalTools> {
+/**
+ * The servers for one profile. The Suunto binary is shared and installed once
+ * (install.ts); each profile gets its own session file and server entry.
+ */
+export async function prepareExternalTools(
+  cfg: Config,
+  log: Logger,
+  installed: SuuntoolInstall | undefined,
+): Promise<ExternalTools> {
   const servers: Record<string, McpServerConfig> = {};
   const env: Record<string, string> = {};
   let suuntoSource: string | undefined;
+  const plog = log.child({ profile: cfg.name });
 
   if (!cfg.SUUNTOOL_SESSION_KEY) {
-    log.warn("SUUNTOOL_SESSION_KEY is unset — Suunto tools disabled");
+    plog.warn("SUUNTOOL_SESSION_KEY is unset — Suunto tools disabled");
+  } else if (!installed) {
+    plog.warn("no suuntool binary — Suunto tools disabled");
   } else {
-    const installed = await ensureSuuntool(cfg, log);
-    if (installed) {
-      const sessionFile = await writeSession(cfg);
-      const binDir = dirname(installed.bin);
-      env.SUUNTOOL_SESSION_FILE = sessionFile;
-      env.PATH = `${binDir}:${process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin"}`;
-      servers[SUUNTO_SERVER] = {
-        type: "stdio",
-        command: installed.bin,
-        args: cfg.SUUNTOOL_MCP_ARGS.split(/\s+/).filter((a) => a.length > 0),
-        env: { SUUNTOOL_SESSION_FILE: sessionFile },
-      };
-      suuntoSource = installed.source;
-    }
+    const sessionFile = await writeSession(cfg);
+    const binDir = dirname(installed.bin);
+    env.SUUNTOOL_SESSION_FILE = sessionFile;
+    env.PATH = `${binDir}:${process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin"}`;
+    servers[SUUNTO_SERVER] = {
+      type: "stdio",
+      command: installed.bin,
+      args: cfg.SUUNTOOL_MCP_ARGS.split(/\s+/).filter((a) => a.length > 0),
+      env: { SUUNTOOL_SESSION_FILE: sessionFile },
+    };
+    suuntoSource = installed.source;
   }
 
   if (cfg.LIFTOSAUR_API_KEY) {
@@ -89,7 +97,7 @@ export async function prepareExternalTools(cfg: CoreConfig, log: Logger): Promis
       headers: { Authorization: `Bearer ${cfg.LIFTOSAUR_API_KEY}` },
     };
   } else {
-    log.warn("LIFTOSAUR_API_KEY is unset — Liftosaur tools disabled");
+    plog.info("LIFTOSAUR_API_KEY is unset — Liftosaur tools disabled for this profile");
   }
 
   return {

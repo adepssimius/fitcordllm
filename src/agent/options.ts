@@ -1,5 +1,5 @@
 import type { McpServerConfig, Options } from "@anthropic-ai/claude-agent-sdk";
-import { sanitizedEnv, type CoreConfig } from "../config.js";
+import { sanitizedEnv, type Config } from "../config.js";
 import type { Logger } from "../logger.js";
 import { createGate, type GateEvent } from "./gate.js";
 import { FITCORD_SERVER } from "./prompts.js";
@@ -26,7 +26,7 @@ export interface SessionIo {
 }
 
 export interface RunSpec extends SessionIo {
-  readonly cfg: CoreConfig;
+  readonly cfg: Config;
   readonly log: Logger;
   /** The thread's clone. Must be the same path on every turn, or resume breaks. */
   readonly workspaceDir: string;

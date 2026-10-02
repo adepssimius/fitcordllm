@@ -33,7 +33,7 @@ function seedTurns(sessionId: string, numTurns: number, startedAt: number): void
 
 function newSession(): string {
   const s = store.sessions.create({
-    id: randomUUID(), kind: "chat", guildId: "g", channelId: "c", threadId: `t-${randomUUID()}`,
+    id: randomUUID(), profile: "default", kind: "chat", guildId: "g", channelId: "c", threadId: `t-${randomUUID()}`,
     agentSessionId: randomUUID(), openedBy: null, title: "t", branch: "fitcord/t", scheduleId: null,
   });
   return s.id;
