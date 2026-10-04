@@ -19,7 +19,7 @@ import type { Workspaces, WorkspaceStatus } from "../git/workspaces.js";
 import { explainVerdict, type QuotaGuard } from "../quota/budget.js";
 import type { Store } from "../store/index.js";
 import type { ExternalTools } from "../suunto/mcp.js";
-import { createFitcordServer, fitcordToolNames, POLLS_PER_TURN } from "../tools/fitcord.js";
+import { createFitcordServer, POLLS_PER_TURN } from "../tools/fitcord.js";
 import type { NewToolCall, PollRequest, Schedule, Session, TurnTrigger } from "./types.js";
 
 /**
@@ -375,7 +375,6 @@ export class SessionManager {
         },
         runScheduleNow: this.runScheduleNow,
       }),
-      fitcordTools: fitcordToolNames(req.interactive),
       extraEnv: external.env,
       isAborted: () => this.aborted.has(session.id),
       onDecision: (e) => {

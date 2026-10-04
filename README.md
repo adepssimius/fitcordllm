@@ -150,10 +150,17 @@ When the key expires, replace it and restart.
 ## What the agent can and cannot do
 
 It has Bash and file tools, because editing a repository and running its scripts
-is the job. What contains it:
+is the job. Inside its clone it works the way a Claude Code session on your
+laptop does, including on the paths Claude Code asks about first: everything
+under `.claude/` (skills, settings, commands, agents, hook scripts), `.mcp.json`
+and editor folders. On a laptop you would click yes; here the bot answers that
+prompt itself, on the same terms as every other tool call. Nothing is ever left
+waiting for an approval no one can give.
+
+What contains it:
 
 - **Edits stay in the thread's clone.** A `PreToolUse` gate refuses writes
-  outside it.
+  outside it, and inside `.git`.
 - **It cannot publish by itself.** The GitHub token exists only in the bot
   process; the clone's remote is plain https with no credential. `ship` is the
   only path to the base branch.
