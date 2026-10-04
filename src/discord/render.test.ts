@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DISCORD_MAX, formatToolCall, renderProgress, splitForDiscord } from "./render.js";
+import { DISCORD_MAX, renderProgress, splitForDiscord } from "./render.js";
 
 const fenceCount = (s: string): number => (s.match(/```/g) ?? []).length;
 
@@ -48,50 +48,33 @@ describe("splitForDiscord", () => {
   });
 });
 
-describe("formatToolCall", () => {
-  it("strips the mcp prefix and renders arguments compactly", () => {
-    expect(
-      formatToolCall("mcp__suuntool__workouts_list", { limit: 5, fields: ["id", "start"] }),
-    ).toBe("suuntool__workouts_list limit=5 fields=id start");
-  });
-
-  it("omits absent and false-valued arguments", () => {
-    expect(formatToolCall("mcp__fitcord__ship", { message: "log 10-02", draft: undefined, force: false })).toBe(
-      "ship message=log 10-02",
-    );
-  });
-
-  it("truncates rather than overflowing the activity block", () => {
-    const out = formatToolCall("Bash", { command: "x".repeat(300) });
-    expect(out.length).toBeLessThanOrEqual(96);
-    expect(out.endsWith("…")).toBe(true);
-  });
-
-  it("survives a non-object input", () => {
-    expect(() => formatToolCall("t", "not-an-object")).not.toThrow();
-  });
-});
-
 describe("renderProgress", () => {
   it("shows a placeholder before any text arrives", () => {
-    expect(renderProgress({ text: "", tools: [], done: false })).toBe("_working…_");
+    expect(renderProgress({ text: "", activity: [], done: false })).toBe("_working…_");
   });
 
   it("appends a rolling window of recent tool calls while running", () => {
     const tools = Array.from({ length: 12 }, (_, i) => `call ${i}`);
-    const out = renderProgress({ text: "thinking about it", tools, done: false });
+    const out = renderProgress({ text: "thinking about it", activity: tools, done: false });
     expect(out).toContain("call 11");
     expect(out).not.toContain("call 0"); // rolled off
     expect(out).toContain("_working…_");
   });
 
+  it("shows activity as small grey status lines, not a code block", () => {
+    const out = renderProgress({ text: "", activity: ["Reading `AGENTS.md`", "Checking the plan"], done: false });
+    expect(out).not.toContain("```");
+    expect(out).toContain("-# · Reading `AGENTS.md`");
+    expect(out).toContain("-# ▸ Checking the plan");
+  });
+
   it("drops the activity block and spinner once finished", () => {
-    const out = renderProgress({ text: "final answer", tools: ["call 1"], done: true });
+    const out = renderProgress({ text: "final answer", activity: ["call 1"], done: true });
     expect(out).toBe("final answer");
   });
 
   it("trims the head so the newest output stays visible, and stays in budget", () => {
-    const out = renderProgress({ text: `${"A".repeat(3000)}TAIL`, tools: [], done: true, limit: 500 });
+    const out = renderProgress({ text: `${"A".repeat(3000)}TAIL`, activity: [], done: true, limit: 500 });
     expect(out.length).toBeLessThanOrEqual(500);
     expect(out.endsWith("TAIL")).toBe(true);
     expect(out.startsWith("…")).toBe(true);

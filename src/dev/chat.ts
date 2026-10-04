@@ -169,6 +169,7 @@ async function main(): Promise<void> {
           const short = JSON.stringify(input);
           console.log(`${DIM}  🔧 ${name.replace(/^mcp__/, "")} ${short.slice(0, 120)}${RESET}`);
         },
+        onToolSummary: (summary) => console.log(`${DIM}  ✓ ${summary}${RESET}`),
         onText: (t) => process.stdout.write(t),
         onRateLimit: (i) => {
           if (i.status !== "allowed") {

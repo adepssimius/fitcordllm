@@ -1,5 +1,6 @@
 import { AttachmentBuilder, type Message, type MessageCreateOptions } from "discord.js";
-import { formatToolCall, renderProgress, SAFE_LIMIT } from "./render.js";
+import { renderProgress, SAFE_LIMIT } from "./render.js";
+import { Activity, describeToolCall } from "./activity.js";
 import { buildMessages, type OutMessage } from "./tables.js";
 
 /**
@@ -31,11 +32,13 @@ export interface StreamerOptions {
   readonly maxMessages: number;
   /** Answers longer than this are posted as a file rather than split. */
   readonly attachOver?: number;
+  /** The thread's clone, so file paths read as repository paths. */
+  readonly root?: string;
 }
 
 export class ThreadStreamer {
   private text = "";
-  private readonly tools: string[] = [];
+  private readonly activity = new Activity();
   private live: Message | undefined;
   private timer: NodeJS.Timeout | undefined;
   private dirty = false;
@@ -62,8 +65,13 @@ export class ThreadStreamer {
     this.schedule();
   }
 
-  onToolUse(name: string, input: unknown): void {
-    this.tools.push(formatToolCall(name, input));
+  onToolUse(name: string, input: unknown, id: string): void {
+    this.activity.add(id, describeToolCall(name, input, this.opts.root));
+    this.schedule();
+  }
+
+  onToolSummary(summary: string, ids: readonly string[]): void {
+    this.activity.summarise(summary, ids);
     this.schedule();
   }
 
@@ -88,7 +96,7 @@ export class ThreadStreamer {
     if (this.closed || this.flushing || !this.dirty) return;
     this.flushing = true;
     this.dirty = false;
-    const body = renderProgress({ text: this.text, tools: this.tools, done: false });
+    const body = renderProgress({ text: this.text, activity: this.activity.recent(5), done: false });
 
     try {
       if (!this.live) {

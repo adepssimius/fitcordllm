@@ -8,7 +8,13 @@ import {
 export interface AgentSink {
   onSession?(sessionId: string): void;
   onText?(text: string): void;
-  onToolUse?(name: string, input: unknown): void;
+  onToolUse?(name: string, input: unknown, id: string): void;
+  /**
+   * Claude Code's own plain-language summary of a group of tool calls,
+   * arriving a few seconds after them. Only emitted when
+   * CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES is set (config.ts sets it).
+   */
+  onToolSummary?(summary: string, toolUseIds: readonly string[]): void;
   onThinking?(): void;
   /**
    * Subscription rate-limit telemetry. This is the server stating the limit
@@ -69,6 +75,11 @@ export async function runQuery(
         continue;
       }
 
+      if (message.type === "tool_use_summary") {
+        sink.onToolSummary?.(message.summary, message.preceding_tool_use_ids);
+        continue;
+      }
+
       if (message.type === "rate_limit_event") {
         rateLimit = message.rate_limit_info;
         sink.onRateLimit?.(rateLimit);
@@ -78,7 +89,7 @@ export async function runQuery(
       if (message.type === "assistant") {
         for (const block of message.message.content) {
           if (block.type === "text") sink.onText?.(block.text);
-          else if (block.type === "tool_use") sink.onToolUse?.(block.name, block.input);
+          else if (block.type === "tool_use") sink.onToolUse?.(block.name, block.input, block.id);
           else if (block.type === "thinking") sink.onThinking?.();
         }
         if (shouldStop?.()) {

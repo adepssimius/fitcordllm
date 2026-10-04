@@ -81,40 +81,26 @@ function hardSplit(line: string, size: number): string[] {
   return out;
 }
 
-/** Compact one-line summary of a tool call for the live activity block. */
-export function formatToolCall(name: string, input: unknown, width = 96): string {
-  const short = name.replace(/^mcp__/, "").replace(/^fitcord__/, "");
-  let args = "";
-  try {
-    const o = input as Record<string, unknown> | null;
-    if (o && typeof o === "object") {
-      args = Object.entries(o)
-        .filter(([, v]) => v !== undefined && v !== null && v !== false)
-        .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(" ") : String(v)}`)
-        .join(" ");
-    }
-  } catch {
-    args = "";
-  }
-  const line = args ? `${short} ${args}` : short;
-  return line.length > width ? `${line.slice(0, width - 1)}…` : line;
-}
-
 /**
- * The live in-progress message: streamed text plus a rolling window of recent
- * tool calls. Kept under the limit by trimming the *head* of the text, since
- * the most recent output is what the reader cares about while it is running.
+ * The live in-progress message: streamed text plus the last few things the
+ * agent has been doing, in words (see activity.ts). Kept under the limit by
+ * trimming the *head* of the text, since the most recent output is what the
+ * reader cares about while it is running.
+ *
+ * Activity lines use Discord's `-#` subtext: small and grey, so they read as
+ * a status line under the answer rather than as part of it.
  */
 export function renderProgress(opts: {
   text: string;
-  tools: readonly string[];
+  activity: readonly string[];
   done: boolean;
   limit?: number;
 }): string {
   const limit = opts.limit ?? SAFE_LIMIT;
+  const recent = opts.done ? [] : opts.activity.slice(-5);
   const activity =
-    opts.tools.length > 0 && !opts.done
-      ? `\n\`\`\`\n${opts.tools.slice(-6).join("\n")}\n\`\`\``
+    recent.length > 0
+      ? `\n${recent.map((line, i) => `-# ${i === recent.length - 1 ? "▸" : "·"} ${line}`).join("\n")}`
       : "";
   const spinner = opts.done ? "" : "\n_working…_";
   const budget = limit - activity.length - spinner.length;

@@ -829,16 +829,21 @@ export class DiscordBot {
 
   private async runBrief(head: Extract<Incoming, { kind: "brief" }>): Promise<void> {
     const { discord, log, store } = this.deps;
-    const { manager } = this.deps.profiles.named(head.session.profile);
+    const { manager, workspaces } = this.deps.profiles.named(head.session.profile);
     const streamer = new ThreadStreamer(
       head.channel,
-      { intervalMs: discord.DISCORD_EDIT_INTERVAL_MS, maxMessages: discord.DISCORD_MAX_MESSAGES_PER_TURN },
+      {
+        intervalMs: discord.DISCORD_EDIT_INTERVAL_MS,
+        maxMessages: discord.DISCORD_MAX_MESSAGES_PER_TURN,
+        root: workspaces.dirFor(head.session.id),
+      },
       head.placeholder,
     );
 
     const result = await manager.runBriefTurn(head.session, head.schedule, {
       onText: (t) => streamer.onText(t),
-      onToolUse: (n, i) => streamer.onToolUse(n, i),
+      onToolUse: (n, i, id) => streamer.onToolUse(n, i, id),
+      onToolSummary: (summary, ids) => streamer.onToolSummary(summary, ids),
     });
 
     if (result.blocked) {
@@ -873,10 +878,11 @@ export class DiscordBot {
     rest: readonly Extract<Incoming, { kind: "chat" }>[],
   ): Promise<void> {
     const { discord, log, store } = this.deps;
-    const { manager } = this.deps.profiles.named(head.session.profile);
+    const { manager, workspaces } = this.deps.profiles.named(head.session.profile);
     const streamer = new ThreadStreamer(head.thread, {
       intervalMs: discord.DISCORD_EDIT_INTERVAL_MS,
       maxMessages: discord.DISCORD_MAX_MESSAGES_PER_TURN,
+      root: workspaces.dirFor(head.session.id),
     });
 
     // Re-read: counters and agentSessionId may have moved since enqueue.
@@ -896,7 +902,8 @@ export class DiscordBot {
       },
       {
         onText: (t) => streamer.onText(t),
-        onToolUse: (n, i) => streamer.onToolUse(n, i),
+        onToolUse: (n, i, id) => streamer.onToolUse(n, i, id),
+        onToolSummary: (summary, ids) => streamer.onToolSummary(summary, ids),
       },
     );
 

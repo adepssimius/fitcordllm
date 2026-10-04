@@ -343,13 +343,19 @@ export function sanitizedEnv(
   extra: Record<string, string> = {},
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {
+  // Has Claude Code emit a plain-language summary after each group of tool
+  // calls ("Read AGENTS.md & verify_plan.py"), which the live progress message
+  // shows instead of the commands themselves. See discord/activity.ts.
+  const always = { CLAUDE_CODE_EMIT_TOOL_USE_SUMMARIES: "1" };
+
   if (cfg.AGENT_INHERIT_ENV) {
     const inherited: Record<string, string> = {};
     for (const [k, v] of Object.entries(env)) if (v !== undefined) inherited[k] = v;
-    return { ...inherited, ...extra };
+    return { ...inherited, ...always, ...extra };
   }
 
   const out: Record<string, string> = {
+    ...always,
     PATH: env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
     TZ: cfg.BOT_TIMEZONE,
     // Without these git inside the workspace refuses to stash or commit, and
