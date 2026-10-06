@@ -19,6 +19,7 @@ import type { Workspaces, WorkspaceStatus } from "../git/workspaces.js";
 import { explainVerdict, type QuotaGuard } from "../quota/budget.js";
 import type { Store } from "../store/index.js";
 import type { ExternalTools } from "../suunto/mcp.js";
+import { answerText } from "../agent/answer.js";
 import { createFitcordServer, POLLS_PER_TURN } from "../tools/fitcord.js";
 import type { NewToolCall, PollRequest, Schedule, Session, TurnTrigger } from "./types.js";
 
@@ -439,13 +440,14 @@ export class SessionManager {
       );
     }
 
-    const text = outcome.ok ? outcome.result : chunks.join("");
+    const answer = outcome.ok ? answerText(chunks, outcome.result) : null;
+    const text = answer ?? chunks.join("\n\n");
     const wasAborted = this.aborted.has(session.id);
 
     // Step 5 — turn state and session counters move together.
     store.turns.finish(turnId, {
       status: outcome.ok ? "ok" : wasAborted ? "aborted" : "error",
-      result: outcome.ok ? outcome.result : text || null,
+      result: answer ?? (text || null),
       error: outcome.ok ? null : outcome.error,
       errorSubtype: outcome.ok ? null : (outcome.subtype ?? null),
       numTurns: outcome.numTurns,
@@ -459,7 +461,7 @@ export class SessionManager {
       blocked: false,
       turnId,
       ok: outcome.ok,
-      text: outcome.ok ? outcome.result : `${describeFailure(outcome.error, wasAborted)}${text ? `\n\n${text}` : ""}`,
+      text: outcome.ok ? (answer ?? outcome.result) : `${describeFailure(outcome.error, wasAborted)}${text ? `\n\n${text}` : ""}`,
       numTurns: outcome.numTurns,
       costUsd: outcome.costUsd,
       deniedTools: denied,

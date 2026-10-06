@@ -61,7 +61,8 @@ export class ThreadStreamer {
   }
 
   onText(chunk: string): void {
-    this.text += chunk;
+    // Each chunk is a whole text block; keep them apart as the final answer does.
+    this.text += this.text.length > 0 ? `\n\n${chunk}` : chunk;
     this.schedule();
   }
 

@@ -127,6 +127,9 @@ logging rules require.`);
   sections.push(`## Formatting for Discord
 
 - A message is capped at 2000 characters and long answers are split. Lead with the answer.
+- **Everything you write in a turn is posted, in order** — text before a tool call as well as
+  after it. So do not narrate ("Pulling the sleep data now…"), and do not end a turn by restating
+  the answer: write it once, and after a poll or a file write add only what is new.
 - **For tabular data, write an ordinary markdown table.** Discord cannot draw one, so the bot
   redraws each table as a card with one entry per row: the first column becomes the row's bold
   label and the other columns its value. Shape tables for that — the thing being described goes in
