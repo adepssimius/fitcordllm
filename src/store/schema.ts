@@ -144,8 +144,27 @@ DROP INDEX schedules_name;
 CREATE UNIQUE INDEX schedules_profile_name ON schedules(profile, name);
 `;
 
+/**
+ * Who is who in a profile: "Ben is the coach and the fitcordllm developer,
+ * Amy is the athlete". Keyed by Discord user id, because that is what a
+ * mention carries; the name is a snapshot for the prompt, refreshed whenever
+ * the person is seen again.
+ */
+const PEOPLE = `
+CREATE TABLE people (
+  profile    TEXT    NOT NULL,
+  user_id    TEXT    NOT NULL,
+  name       TEXT    NOT NULL,
+  role       TEXT    NOT NULL,
+  updated_by TEXT,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (profile, user_id)
+) STRICT;
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { id: 1, name: "init", sql: INIT },
   { id: 2, name: "polls", sql: POLLS },
   { id: 3, name: "profiles", sql: PROFILES },
+  { id: 4, name: "people", sql: PEOPLE },
 ];

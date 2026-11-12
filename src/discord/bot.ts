@@ -16,7 +16,7 @@ import type { Store } from "../store/index.js";
 import { localStamp, pollAnswerContent } from "../agent/prompts.js";
 import type { Profile, Profiles } from "../profile.js";
 import { ThreadQueue } from "../session/queue.js";
-import type { PollRequest, Schedule, Session } from "../session/types.js";
+import type { Mentioned, PollRequest, Schedule, Session } from "../session/types.js";
 import { checkActor, type AuthzConfig } from "./authz.js";
 import { classifyContent, route, type RouteDecision } from "./router.js";
 import { buildThreadContext, type ContextMessage } from "./context.js";
@@ -43,6 +43,8 @@ type Incoming =
       readonly actorId: string;
       readonly authorName: string;
       readonly content: string;
+      /** People the message @-mentions, other than the bot. */
+      readonly mentions?: readonly Mentioned[];
       readonly session: Session;
       readonly thread: ThreadChannel;
       /**
@@ -365,6 +367,7 @@ export class DiscordBot {
       actorId: message.author.id,
       authorName: message.member?.displayName ?? message.author.username,
       content,
+      mentions: this.mentionsIn(message),
       session,
       thread,
       ...(threadContext ? { threadContext } : {}),
@@ -383,6 +386,26 @@ export class DiscordBot {
   private briefByThread(messageId: string): Session | undefined {
     const s = this.deps.store.sessions.byThread(messageId);
     return s?.kind === "brief" ? s : undefined;
+  }
+
+  /**
+   * The people a message @-mentions, by the name the server shows for them.
+   *
+   * Only mentions written in the text: Discord also lists the author of a
+   * message being replied to, and replying to Amy is not saying anything
+   * about Amy. The bot itself is left out — mentioning it is how it is
+   * addressed, not a person being talked about.
+   */
+  private mentionsIn(message: Message): Mentioned[] {
+    const me = this.client.user?.id;
+    const out: Mentioned[] = [];
+    for (const u of message.mentions.users.values()) {
+      if (u.id === me) continue;
+      if (!new RegExp(`<@!?${u.id}>`).test(message.content)) continue;
+      const name = message.mentions.members?.get(u.id)?.displayName ?? u.globalName ?? u.username;
+      out.push({ userId: u.id, name });
+    }
+    return out;
   }
 
   /** Removes the ways this message can address the bot, leaving the prompt. */
@@ -895,8 +918,12 @@ export class DiscordBot {
         actorId: head.actorId,
         message: {
           authorDisplayName: head.authorName,
+          authorId: head.actorId,
           content: head.content,
-          ...(rest.length > 0 ? { coalescedWith: rest.map((r) => r.content) } : {}),
+          mentions: mergeMentions([head, ...rest]),
+          ...(rest.length > 0
+            ? { coalescedWith: rest.map((r) => ({ author: r.authorName, content: r.content })) }
+            : {}),
           ...(head.threadContext ? { threadContext: head.threadContext } : {}),
         },
       },
@@ -938,4 +965,18 @@ export class DiscordBot {
       "chat turn complete",
     );
   }
+}
+
+/**
+ * Everyone mentioned across a batch of queued messages — and the authors of
+ * the later ones, who are as much part of the turn as the first. Each id once.
+ */
+function mergeMentions(batch: readonly { actorId: string; authorName: string; mentions?: readonly Mentioned[] }[]): Mentioned[] {
+  const head = batch[0]?.actorId;
+  const seen = new Map<string, Mentioned>();
+  batch.forEach((m, i) => {
+    if (i > 0 && m.actorId !== head) seen.set(m.actorId, { userId: m.actorId, name: m.authorName });
+    for (const p of m.mentions ?? []) if (p.userId !== head) seen.set(p.userId, p);
+  });
+  return [...seen.values()];
 }

@@ -21,7 +21,7 @@ import type { Store } from "../store/index.js";
 import type { ExternalTools } from "../suunto/mcp.js";
 import { answerText } from "../agent/answer.js";
 import { createFitcordServer, POLLS_PER_TURN } from "../tools/fitcord.js";
-import type { NewToolCall, PollRequest, Schedule, Session, TurnTrigger } from "./types.js";
+import type { Mentioned, NewToolCall, PollRequest, Schedule, Session, TurnTrigger } from "./types.js";
 
 /**
  * Owns the commit protocol. Nothing else writes session or turn state.
@@ -84,6 +84,8 @@ interface ExecuteRequest {
   readonly buildPrompt: (turn: TurnContext) => string;
   /** False for a scheduled run: no publishing or scheduling tools. */
   readonly interactive: boolean;
+  /** The author and whoever they @-mentioned; empty for a scheduled run. */
+  readonly mentioned: readonly Mentioned[];
 }
 
 const TOOL_FLUSH_EVERY = 10;
@@ -247,6 +249,10 @@ export class SessionManager {
         trigger: req.trigger,
         actorId: req.actorId,
         buildPrompt: (turn) => chatUserPrompt(req.message, turn),
+        mentioned: [
+          ...(req.actorId ? [{ userId: req.actorId, name: req.message.authorDisplayName }] : []),
+          ...(req.message.mentions ?? []).filter((m) => m.userId !== req.actorId),
+        ],
         // A brief that someone continued in a thread is a conversation like
         // any other from then on: a person is there, and may ask to ship.
         interactive: true,
@@ -263,6 +269,7 @@ export class SessionManager {
         actorId: null,
         buildPrompt: (turn) => briefUserPrompt(schedule, turn),
         interactive: false,
+        mentioned: [],
       },
       sink,
     );
@@ -312,7 +319,15 @@ export class SessionManager {
       log.warn({ sessionId: session.id }, "SDK transcript unavailable — rebuilding context from the store");
     }
 
-    const turn: TurnContext = { now: new Date(), timeZone: cfg.BOT_TIMEZONE, workspace: status };
+    // Names drift: keep the roster's in step with what Discord shows now.
+    for (const m of req.mentioned) store.people.rename(cfg.name, m.userId, m.name);
+
+    const turn: TurnContext = {
+      now: new Date(),
+      timeZone: cfg.BOT_TIMEZONE,
+      workspace: status,
+      people: store.people.list(cfg.name),
+    };
     const prompt = (contextRebuilt ? this.recapPrefix(session.id) : "") + req.buildPrompt(turn);
 
     // Step 3 — durable before a token is spent.
@@ -367,6 +382,7 @@ export class SessionManager {
         session,
         actorId: req.actorId,
         interactive: req.interactive,
+        mentioned: req.mentioned,
         // Only a real Discord id: the dev REPL's "repl" channel is not one.
         defaultChannelId: /^\d{5,25}$/.test(session.channelId) ? session.channelId : undefined,
         requestPoll: (p) => {

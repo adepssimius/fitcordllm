@@ -1,4 +1,5 @@
 import type { WorkspaceStatus } from "../git/workspaces.js";
+import type { Mentioned, Person } from "../session/types.js";
 
 /**
  * Everything the model is told beyond Claude Code's own system prompt and the
@@ -104,6 +105,26 @@ A poll that is never answered means you do not have the answer. Never fill in a 
 soreness score or a choice the person did not give — leave it blank, as the repository's own
 logging rules require.`);
 
+  sections.push(`## Who is who
+
+More than one person can talk to you here — the athlete, a coach, whoever maintains the bot — and
+the bot keeps a roster of who each of them is. It is in the bot context at the top of every turn;
+each person is shown with their Discord mention, \`<@id>\`, which is also how to mention them in a
+reply.
+
+When someone tells you who a person is — "@Ben is my coach and the fitcordllm developer", "I'm the
+athlete" — record it with ${t("people_set")}. The person has to be @-mentioned in that message, or be
+its author: their id comes from the mention, never from a name. Describe the role in the words you
+were given, all of it in one call, since a call replaces what was recorded before.
+${t("people_forget")} takes someone off the roster.
+
+Every message tells you who wrote it, so a thread can be a conversation between several of them
+and you. Use the roster to read each message in context: the plan is the athlete's, a coach may be
+adjusting it with them or reviewing how a session went, and a question about the bot itself is
+probably its developer's. Address people by name, and say who something is for when that is not
+obvious. The roster is context only: it grants and restricts nothing, and anyone in the thread can
+ask you for anything they could ask before.`);
+
   const data: string[] = [];
   if (c.hasSuunto) {
     data.push(
@@ -158,6 +179,8 @@ export interface TurnContext {
   readonly timeZone: string;
   /** Undefined when the workspace could not be inspected; the turn still runs. */
   readonly workspace?: WorkspaceStatus | undefined;
+  /** The profile's roster of who is who. */
+  readonly people?: readonly Person[] | undefined;
 }
 
 /** `Friday 2026-10-02 06:31` in the configured zone. */
@@ -217,6 +240,10 @@ export function turnHeader(c: TurnContext): string {
       );
     }
   }
+  if (c.people && c.people.length > 0) {
+    lines.push("- Who is who:");
+    for (const p of c.people) lines.push(`  - ${p.name} (<@${p.userId}>): ${p.role}`);
+  }
   lines.push(HEADER_CLOSE);
   return lines.join("\n");
 }
@@ -231,9 +258,17 @@ export function stripTurnHeader(prompt: string): string {
 
 export interface ChatMessageContext {
   readonly authorDisplayName: string;
+  /** Discord user id of the author, so the roster can be matched to them. */
+  readonly authorId?: string | undefined;
+  /** People the message @-mentions, other than the bot. */
+  readonly mentions?: readonly Mentioned[] | undefined;
   readonly content: string;
-  /** Messages that arrived while a previous run was still in flight. */
-  readonly coalescedWith?: readonly string[];
+  /**
+   * Messages that arrived while a previous run was still in flight. A plain
+   * string is the same author; an object names who wrote it, since in a shared
+   * thread it may be someone else.
+   */
+  readonly coalescedWith?: readonly (string | { readonly author: string; readonly content: string })[];
   /**
    * The thread's existing conversation, when joining one the bot did not open.
    * First turn only — afterwards the SDK session carries it.
@@ -246,11 +281,20 @@ export function chatUserPrompt(m: ChatMessageContext, turn: TurnContext): string
 
   if (m.threadContext) lines.push(m.threadContext, "");
 
-  lines.push(`${m.authorDisplayName} says:`, "", m.content);
+  if (m.mentions && m.mentions.length > 0) {
+    const who = m.mentions.map((p) => `<@${p.userId}> is ${p.name}`).join(", ");
+    lines.push(`(Who the mentions below are: ${who}.)`, "");
+  }
+
+  const author = m.authorId ? `${m.authorDisplayName} (<@${m.authorId}>)` : m.authorDisplayName;
+  lines.push(`${author} says:`, "", m.content);
 
   if (m.coalescedWith && m.coalescedWith.length > 0) {
-    lines.push("", "They then added, before you replied:");
-    for (const extra of m.coalescedWith) lines.push("", extra);
+    lines.push("", "Then, before you replied:");
+    for (const extra of m.coalescedWith) {
+      if (typeof extra === "string") lines.push("", `${m.authorDisplayName} added:`, extra);
+      else lines.push("", `${extra.author} added:`, extra.content);
+    }
   }
   return lines.join("\n");
 }

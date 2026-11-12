@@ -4,7 +4,7 @@ import type { Config } from "../config.js";
 import { FITCORD_SERVER, localStamp } from "../agent/prompts.js";
 import type { ShipResult, SyncResult, WorkspaceRef, Workspaces } from "../git/workspaces.js";
 import { checkCron } from "../schedule/cron.js";
-import type { PollRequest, Schedule } from "../session/types.js";
+import type { Mentioned, PollRequest, Schedule } from "../session/types.js";
 import type { Store } from "../store/index.js";
 
 /**
@@ -43,6 +43,12 @@ export interface FitcordToolDeps {
    * turn has already asked for as many as it may.
    */
   readonly requestPoll: (poll: PollRequest) => boolean;
+  /**
+   * Who this turn can name: its author and everyone the message @-mentioned.
+   * The roster tools take ids from here and nowhere else, so a person is
+   * always identified by a mention and never by a guess at a name.
+   */
+  readonly mentioned?: readonly Mentioned[] | undefined;
   /** Posts a schedule's brief now. Absent in the dev REPL, which has no channel. */
   readonly runScheduleNow?: ((schedule: Schedule) => void) | undefined;
 }
@@ -91,6 +97,33 @@ function describeSchedule(s: Schedule, timeZone: string): string {
   ].join("\n");
 }
 
+/**
+ * What `people_set` does, apart from the SDK: records a role for someone this
+ * turn can name, and refuses anyone else — an id the model recalled or made
+ * up would put a role on the wrong person, or on nobody.
+ */
+export function recordPerson(
+  store: Pick<Store, "people">,
+  profile: string,
+  mentioned: readonly Mentioned[],
+  userId: string,
+  role: string,
+  actorId: string | null,
+): { ok: boolean; message: string } {
+  const who = mentioned.find((m) => m.userId === userId);
+  if (!who) {
+    const known = mentioned.map((m) => `${m.name} <@${m.userId}>`).join(", ") || "nobody";
+    return {
+      ok: false,
+      message:
+        `Not recorded: <@${userId}> is not the author of this message or mentioned in it ` +
+        `(this message can name: ${known}). Ask them to @-mention the person.`,
+    };
+  }
+  const saved = store.people.set({ profile, userId: who.userId, name: who.name, role: role.trim(), updatedBy: actorId });
+  return { ok: true, message: `Recorded: ${saved.name} (<@${saved.userId}>) — ${saved.role}.` };
+}
+
 /** Discord's limits on a poll. */
 export const POLL_MAX_OPTIONS = 10;
 export const POLL_MAX_OPTION_CHARS = 55;
@@ -108,6 +141,8 @@ export const INTERACTIVE_TOOL_NAMES = [
   "schedule_set",
   "schedule_delete",
   "schedule_run_now",
+  "people_set",
+  "people_forget",
 ] as const;
 
 export function fitcordToolNames(interactive: boolean): string[] {
@@ -334,6 +369,42 @@ export function createFitcordServer(deps: FitcordToolDeps) {
     },
   );
 
+  const mentioned = deps.mentioned ?? [];
+  const mentionId = z
+    .string()
+    .transform((v) => v.replace(/^<@!?(\d+)>$/, "$1").trim())
+    .describe("The person's Discord user id — the digits in their `<@id>` mention.");
+
+  const peopleSet = tool(
+    "people_set",
+    "Record who someone is to this person's training — athlete, coach, the bot's developer, a " +
+      "training partner. Replaces whatever was recorded for them before. The person must be the " +
+      "author of the current message or @-mentioned in it.",
+    {
+      user_id: mentionId,
+      role: z
+        .string()
+        .min(2)
+        .max(200)
+        .describe("Who they are, in the words you were given, e.g. `coach; fitcordllm developer`."),
+    },
+    async (a) => {
+      const r = recordPerson(store, cfg.name, mentioned, a.user_id, a.role, deps.actorId);
+      return r.ok ? text(r.message) : failure(r.message);
+    },
+  );
+
+  const peopleForget = tool(
+    "people_forget",
+    "Take someone off the roster of who is who.",
+    { user_id: mentionId },
+    async (a) =>
+      store.people.remove(cfg.name, a.user_id)
+        ? text(`<@${a.user_id}> is no longer on the roster.`)
+        : failure(`<@${a.user_id}> was not on the roster.`),
+    { annotations: { destructiveHint: true } },
+  );
+
   return createSdkMcpServer({
     name: FITCORD_SERVER,
     version: "0.1.0",
@@ -347,6 +418,8 @@ export function createFitcordServer(deps: FitcordToolDeps) {
       scheduleSet,
       scheduleDelete,
       scheduleRunNow,
+      peopleSet,
+      peopleForget,
     ],
   });
 }

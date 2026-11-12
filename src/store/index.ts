@@ -4,6 +4,7 @@ import { createTurnDao, type TurnDao } from "./turns.js";
 import { createScheduleDao, type ScheduleDao } from "./schedules.js";
 import { createStateDao, type StateDao } from "./state.js";
 import { createPollDao, type PollDao } from "./polls.js";
+import { createPeopleDao, type PeopleDao } from "./people.js";
 
 export interface Store {
   readonly sessions: SessionDao;
@@ -11,6 +12,7 @@ export interface Store {
   readonly schedules: ScheduleDao;
   readonly state: StateDao;
   readonly polls: PollDao;
+  readonly people: PeopleDao;
   tx<T>(fn: () => T): T;
   close(): void;
   readonly raw: Db;
@@ -24,10 +26,11 @@ export function openStore(path: string): Store {
     schedules: createScheduleDao(db),
     state: createStateDao(db),
     polls: createPollDao(db),
+    people: createPeopleDao(db),
     tx: (fn) => transaction(db, fn),
     close: () => db.close(),
     raw: db,
   };
 }
 
-export type { SessionDao, TurnDao, ScheduleDao, StateDao, PollDao };
+export type { SessionDao, TurnDao, ScheduleDao, StateDao, PollDao, PeopleDao };

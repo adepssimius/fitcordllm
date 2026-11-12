@@ -118,7 +118,7 @@ describe("user prompts", () => {
       { now, timeZone: "UTC", workspace: status() },
     );
     expect(p.indexOf("Bot context for this turn")).toBeLessThan(p.indexOf("sam says:"));
-    expect(p).toContain("They then added, before you replied:\n\nto Sunday");
+    expect(p).toContain("Then, before you replied:\n\nsam added:\nto Sunday");
   });
 
   it("never opens a prompt with a tag, or the thread cannot be resumed after a restart", () => {
@@ -161,6 +161,47 @@ describe("tool surface", () => {
     expect(names).toContain("mcp__fitcord__ship");
     expect(names).toContain("mcp__fitcord__sync");
     expect(names).toContain("mcp__fitcord__schedule_set");
+    expect(names).toContain("mcp__fitcord__people_set");
+    expect(fitcordToolNames(false)).not.toContain("mcp__fitcord__people_set");
+  });
+});
+
+describe("who is who", () => {
+  const person = (userId: string, name: string, role: string) => ({
+    profile: "amy", userId, name, role, updatedBy: null, updatedAt: 0,
+  });
+
+  it("puts the roster in every turn's header, briefs included", () => {
+    const people = [person("1", "Amy", "athlete"), person("2", "Ben", "coach; fitcordllm developer")];
+    const h = turnHeader({ now, timeZone: "UTC", people });
+    expect(h).toContain("- Who is who:\n  - Amy (<@1>): athlete\n  - Ben (<@2>): coach; fitcordllm developer");
+    expect(briefUserPrompt({ name: "b", prompt: "p" }, { now, timeZone: "UTC", people })).toContain("Ben (<@2>)");
+    expect(turnHeader({ now, timeZone: "UTC", people: [] })).not.toContain("Who is who");
+  });
+
+  it("says who wrote the message and who it mentions", () => {
+    const p = chatUserPrompt(
+      { authorDisplayName: "Amy", authorId: "1", content: "<@2> is my coach", mentions: [{ userId: "2", name: "Ben" }] },
+      { now, timeZone: "UTC" },
+    );
+    expect(p).toContain("(Who the mentions below are: <@2> is Ben.)");
+    expect(p).toContain("Amy (<@1>) says:\n\n<@2> is my coach");
+  });
+
+  it("keeps each queued message's author in a shared thread", () => {
+    const p = chatUserPrompt(
+      {
+        authorDisplayName: "Amy",
+        content: "legs are cooked",
+        coalescedWith: [{ author: "Ben", content: "swap tomorrow for rest then" }],
+      },
+      { now, timeZone: "UTC" },
+    );
+    expect(p).toContain("Ben added:\nswap tomorrow for rest then");
+  });
+
+  it("tells the agent the roster restricts nothing", () => {
+    expect(sys()).toContain("grants and restricts nothing");
   });
 });
 
