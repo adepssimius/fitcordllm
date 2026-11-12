@@ -161,3 +161,25 @@ export interface PollRow extends PollRequest {
   readonly answeredAt: number | null;
   readonly answer: readonly string[] | null;
 }
+
+/**
+ * Someone the bot has been told about: who they are to this profile. The role
+ * is free text in the words it was given — "athlete", "coach; fitcordllm
+ * developer" — because it is read by the model, not matched by code.
+ */
+export interface Person {
+  readonly profile: string;
+  /** Discord user id. */
+  readonly userId: string;
+  /** Display name when last seen. */
+  readonly name: string;
+  readonly role: string;
+  readonly updatedBy: string | null;
+  readonly updatedAt: number;
+}
+
+/** Someone a turn can refer to by id: its author and whoever they @-mentioned. */
+export interface Mentioned {
+  readonly userId: string;
+  readonly name: string;
+}

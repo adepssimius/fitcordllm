@@ -33,6 +33,7 @@ describe("migrations", () => {
       { id: 1, name: "init" },
       { id: 2, name: "polls" },
       { id: 3, name: "profiles" },
+      { id: 4, name: "people" },
     ]);
   });
 
@@ -246,5 +247,26 @@ describe("profiles", () => {
     expect(store.schedules.due(1_000)).toHaveLength(2);
     expect(store.schedules.delete("amy", "morning-brief")).toBe(true);
     expect(store.schedules.list("ben")).toHaveLength(1);
+  });
+});
+
+describe("people", () => {
+  it("keep a roster per profile, replaced by id and kept current by name", () => {
+    store.people.set({ profile: "amy", userId: "2", name: "Ben", role: "coach", updatedBy: "1" });
+    store.people.set({ profile: "amy", userId: "1", name: "Amy", role: "athlete", updatedBy: "1" });
+    store.people.set({ profile: "amy", userId: "2", name: "Ben", role: "coach; fitcordllm developer", updatedBy: "2" });
+    expect(store.people.list("amy").map((p) => `${p.name}: ${p.role}`)).toEqual([
+      "Amy: athlete",
+      "Ben: coach; fitcordllm developer",
+    ]);
+    expect(store.people.list("ben")).toEqual([]);
+
+    store.people.rename("amy", "2", "Coach Ben");
+    store.people.rename("amy", "9", "Stranger"); // not on the roster: nothing happens
+    expect(store.people.get("amy", "2")).toMatchObject({ name: "Coach Ben", role: "coach; fitcordllm developer" });
+    expect(store.people.list("amy")).toHaveLength(2);
+
+    expect(store.people.remove("amy", "1")).toBe(true);
+    expect(store.people.remove("amy", "1")).toBe(false);
   });
 });

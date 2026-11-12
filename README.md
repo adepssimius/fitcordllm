@@ -97,6 +97,22 @@ read from the plain variables — which is how a single-person deployment is
 configured. Naming profiles later keeps every existing thread: they are
 handed to the first profile named.
 
+### Who is who
+
+Several people can share a profile's threads: Amy trains, Ben coaches her
+and maintains the bot. Tell the bot who is who in plain words, @-mentioning
+the person:
+
+> @fitcord @Ben is my coach and the fitcordllm developer, I'm the athlete
+
+The agent records each role in the profile's roster. From then on every
+turn, scheduled briefs included, carries the roster, and every message says
+who wrote it. So Ben can chime in on one of Amy's threads and the agent knows
+whose plan it is and who is talking. To change someone's role, say so again;
+to drop them, ask the bot to forget them. The roster is context only: it
+grants and restricts nothing, and who may talk to the bot is still decided
+by the profile's channel and allowlist.
+
 ## Polls
 
 When the answer is one of a few known things, the agent asks with a native
